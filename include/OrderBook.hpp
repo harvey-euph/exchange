@@ -1,8 +1,9 @@
 #pragma once
-#include <cstdint>
+#include <map>
 #include <vector>
-#include <unordered_map>
 #include <atomic>
+#include <cstdint>
+#include <unordered_map>
 // #include <rte_ring.h>
 #include "generated/order_generated.h"
 
@@ -12,11 +13,11 @@ struct Order
 {
     uint64_t order_id;
     uint32_t client_id;
-    uint64_t quantity;     // 剩餘量
-    uint64_t visible_qty;  // Iceberg 用
+    uint64_t qty_original;
+    uint64_t qty_remaining;
+    // uint64_t qty_visible;  // For Iceberg
 
-    Side side;
-    OrderType type;
+    OrderType type; // Only consider limit and market order for now
 
     Order* prev = nullptr;
     Order* next = nullptr;
@@ -28,17 +29,17 @@ struct Order
 
 struct PriceLevel
 {
-    int64_t  price = 0;
+    size_t   price_idx = 0;
     uint64_t total_qty = 0;
     uint64_t order_count = 0;
 
-    Order    dummy_head;   // prev 永遠是 nullptr
-    Order    dummy_tail;   // next 永遠是 nullptr
+    Order    dummy_head;   // prev always nullptr
+    Order    dummy_tail;   // next always nullptr
 
-    PriceLevel* higher = nullptr;
-    PriceLevel* lower  = nullptr;
+    PriceLevel* better = nullptr;
+    PriceLevel* worse  = nullptr;
 
-    PriceLevel(int64_t p = 0) : price(p) {
+    PriceLevel(size_t p = 0) : price_idx(p) {
         dummy_head.next = &dummy_tail;
         dummy_tail.prev = &dummy_head;
     }
@@ -56,10 +57,14 @@ public:
     ~OrderBook();
 
     void processRequest(const OrderRequest* req);
+    void printOrderRequest(const OrderRequest* req);
+    
     void showL2(size_t depth = UINT32_MAX);
 
-    using MatchCallback = void(*)(uint64_t taker_order_id, uint64_t maker_order_id,
-                                  int64_t price, uint64_t qty, Side maker_side);
+    using MatchCallback = void(*)(
+        uint64_t taker_order_id, uint64_t maker_order_id,
+        int64_t price, uint64_t qty, Side maker_side
+    );
 
     void setMatchCallback(MatchCallback cb) { match_cb_ = cb; }
 
@@ -68,25 +73,45 @@ private:
     const int64_t price_offset_;       // 價格基準 (array index 0 對應的價格)
     const size_t  max_price_levels_;   // price_array_ 大小
 
-    std::vector<PriceLevel*> price_array_;
+    int price_invalid(const int64_t price) {
+        if (price_offset_ > price) return 1;
+        if (price_offset_ + (int64_t)max_price_levels_ < price) return -1;
+        return 0;
+    }
+    size_t price_to_index(const int64_t price) {
+        return price - price_offset_;
+    }
+    size_t index_to_price(const size_t index) {
+        return index + price_offset_;
+    }
 
-    PriceLevel* bid_head_ = nullptr;   // 最高買價
-    PriceLevel* ask_head_ = nullptr;   // 最低賣價
+    Order* createOrder(const OrderRequest* req);
+
+    std::vector<PriceLevel> price_array_;
+    // PriceLevel unmatched_market_orders[2]; // [B][A]
+    PriceLevel* best_levels_[2] = {nullptr, nullptr};  // [B1][A1] , can be market order
 
     std::unordered_map<uint64_t, Order*> active_orders_;
+    std::map<size_t, PriceLevel*> active_levels_;
 
     MatchCallback match_cb_ = nullptr;
 
     // 內部 helper
     PriceLevel* GetOrCreatePriceLevel(int64_t price, Side side);
-    void eemovePriceLevelIfEmpty(PriceLevel* pl);
+    void removePriceLevelIfEmpty(PriceLevel* pl);
     void match(Order* incoming);
     void addToBook(Order* order);
-    void cancelOrder(uint64_t order_id);
-    void modifyOrder(uint64_t order_id, int64_t new_price, uint64_t new_qty);
+
+    void handleNewOrder(Side side, size_t price_idx, const Order* incoming);
+    void handleCancelOrder(uint32_t client_id, uint64_t order_id);
+    void handleModifyOrder(uint32_t client_id, uint64_t order_id, size_t new_price_idx, uint64_t new_qty);
 
     // Linked list 操作
     void insertOrderToLevel(PriceLevel* level, Order* order);
     void removeOrderFromLevel(Order* order);
+
+    void send_reject(uint32_t client_id, std::string reason /* TODO: change to enum */);
+    void send_acked(const Order* incoming);
+    void send_fill(const Order* incoming, const Order* existing, uint64_t qty_fill);
 };
 }

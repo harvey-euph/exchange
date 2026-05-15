@@ -53,7 +53,8 @@ bool OrderRequestReader::loadFromCSV(const std::string& csv_filename) {
     std::getline(file, line); // 跳過標題
     line_num++;
 
-    while (std::getline(file, line)) {
+    while (std::getline(file, line)) 
+    {
         line_num++;
         if (line.empty() || line[0] == '#') continue;
 
@@ -65,7 +66,7 @@ bool OrderRequestReader::loadFromCSV(const std::string& csv_filename) {
             fields.push_back(field);
         }
 
-        if (fields.size() < 9) {
+        if (fields.size() < 10) {
             std::cerr << "[Warning] Line " << line_num << " skipped.\n";
             continue;
         }
@@ -75,21 +76,23 @@ bool OrderRequestReader::loadFromCSV(const std::string& csv_filename) {
 
             // 解析 Action
             OrderAction action = OrderAction_New;
-            if (fields[2] == "Cancel") action = OrderAction_Cancel;
-            else if (fields[2] == "Modify") action = OrderAction_Modify;
+            if (fields[3] == "Cancel") action = OrderAction_Cancel;
+            else if (fields[3] == "Modify") action = OrderAction_Modify;
 
-            Side side = (fields[3] == "Buy" || fields[3] == "buy") ? Side_Buy : Side_Sell;
+            Side side = (fields[4] == "Buy" || fields[4] == "buy") ? Side_Buy : Side_Sell;
+            OrderType type = OrderType_Limit;
+            if (fields[5] == "Market") type = OrderType_Market;
 
-            uint64_t order_id     = safe_stoull(fields[0]);
-            uint32_t client_id    = safe_stoul(fields[1]);
-            uint32_t symbol_id    = (fields.size() > 9) ? safe_stoul(fields[9]) : 1;
+            uint64_t req_id       = safe_stoull(fields[0]);
+            uint64_t order_id     = safe_stoull(fields[1]);
+            uint32_t client_id    = safe_stoul(fields[2]);
+            uint32_t symbol_id    = (fields.size() > 10) ? safe_stoul(fields[10]) : 1;
             
-            int64_t  price        = safe_stoll(fields[5]);
-            uint64_t quantity     = safe_stoull(fields[6]);
-            uint64_t visible_qty  = (fields.size() > 7) ? safe_stoull(fields[7]) : 0;
-            uint64_t timestamp    = safe_stoull(fields[8]);
+            int64_t  price        = safe_stoll(fields[6]);
+            uint64_t quantity     = safe_stoull(fields[7]);
+            uint64_t visible_qty  = (fields.size() > 8) ? safe_stoull(fields[8]) : 0;
+            uint64_t timestamp    = safe_stoull(fields[9]);
 
-            // 對於 Cancel/Modify，price 和 quantity 通常為 0（或可忽略）
             if (action == OrderAction_Cancel) {
                 price = 0;
                 quantity = 0;
@@ -98,11 +101,12 @@ bool OrderRequestReader::loadFromCSV(const std::string& csv_filename) {
             auto req_offset = CreateOrderRequest(
                 *builder,
                 action,
+                req_id,
                 order_id,
                 client_id,
                 symbol_id,
                 side,
-                OrderType_Limit,
+                type,
                 price,
                 quantity,
                 visible_qty,
