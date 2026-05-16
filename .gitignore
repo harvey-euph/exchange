@@ -1,5 +1,6 @@
 *.d
 *.o
+*.log
 fbs
 include/generated
 exchange_orderbook

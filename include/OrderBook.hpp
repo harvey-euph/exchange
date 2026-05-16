@@ -39,7 +39,7 @@ struct PriceLevel
     PriceLevel* better = nullptr;
     PriceLevel* worse  = nullptr;
 
-    PriceLevel(size_t p = 0) : price_idx(p) {
+    PriceLevel() {
         dummy_head.next = &dummy_tail;
         dummy_tail.prev = &dummy_head;
     }
@@ -70,19 +70,19 @@ public:
 
 private:
     const int64_t min_step_;           // 最小價格單位 (定點數)
-    const int64_t price_offset_;       // 價格基準 (array index 0 對應的價格)
+    const int64_t price_index_offset_; // 
     const size_t  max_price_levels_;   // price_array_ 大小
 
-    int price_invalid(const int64_t price) {
-        if (price_offset_ > price) return 1;
-        if (price_offset_ + (int64_t)max_price_levels_ < price) return -1;
-        return 0;
-    }
     size_t price_to_index(const int64_t price) {
-        return price - price_offset_;
+        return price / min_step_ - price_index_offset_;
     }
     size_t index_to_price(const size_t index) {
-        return index + price_offset_;
+        return (index + price_index_offset_) * min_step_;
+    }
+    int price_invalid(const int64_t price) {
+        if (price / min_step_ < price_index_offset_) return 1;
+        if (price_index_offset_ + (int64_t)max_price_levels_ < price / min_step_) return -1;
+        return 0;
     }
 
     Order* createOrder(const OrderRequest* req);
@@ -92,19 +92,19 @@ private:
     PriceLevel* best_levels_[2] = {nullptr, nullptr};  // [B1][A1] , can be market order
 
     std::unordered_map<uint64_t, Order*> active_orders_;
-    std::map<size_t, PriceLevel*> active_levels_;
+    std::map<size_t, PriceLevel*> active_levels_[2];// [B][A]
 
     MatchCallback match_cb_ = nullptr;
 
     // 內部 helper
-    PriceLevel* GetOrCreatePriceLevel(int64_t price, Side side);
+    PriceLevel* GetOrCreatePriceLevel(size_t price_index, Side side);
     void removePriceLevelIfEmpty(PriceLevel* pl);
     void match(Order* incoming);
     void addToBook(Order* order);
 
-    void handleNewOrder(Side side, size_t price_idx, const Order* incoming);
-    void handleCancelOrder(uint32_t client_id, uint64_t order_id);
-    void handleModifyOrder(uint32_t client_id, uint64_t order_id, size_t new_price_idx, uint64_t new_qty);
+    void handleNewOrder(const OrderRequest* req);
+    void handleCancelOrder(const OrderRequest* req);
+    void handleModifyOrder(const OrderRequest* req);
 
     // Linked list 操作
     void insertOrderToLevel(PriceLevel* level, Order* order);
@@ -112,6 +112,6 @@ private:
 
     void send_reject(uint32_t client_id, std::string reason /* TODO: change to enum */);
     void send_acked(const Order* incoming);
-    void send_fill(const Order* incoming, const Order* existing, uint64_t qty_fill);
+    void send_fill(const Order* incoming, const Order* existing, size_t price_idx, uint64_t qty_fill);
 };
 }
