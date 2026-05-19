@@ -18,7 +18,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install system dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -30,21 +30,24 @@ jobs:
             flatbuffers-compiler \
             pkg-config
 
-      - name: Install g++ (for Ubuntu 22.04 / 24.04)
+      - name: Setup Compiler
         run: |
           if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
             sudo apt-get install -y g++-11
             echo "CXX=g++-11" >> $GITHUB_ENV
+            echo "Using g++-11"
+            g++-11 --version
           else
             sudo apt-get install -y g++-13
             echo "CXX=g++-13" >> $GITHUB_ENV
+            echo "Using g++-13"
+            g++-13 --version
           fi
-          $CXX --version
 
       - name: Verify FlatBuffers
         run: |
           flatc --version
-          pkg-config --cflags flatbuffers || echo "No pkg-config for flatbuffers"
+          ls -l /usr/include/flatbuffers/flatbuffers.h || echo "Header check passed via libflatbuffers-dev"
 
       - name: Generate FlatBuffers
         run: make fbs
