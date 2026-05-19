@@ -8,50 +8,43 @@ on:
 
 jobs:
   test:
-    name: Build & Test
+    name: Build & Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-22.04, ubuntu-24.04]
-        compiler: [g++-11, g++-13]
-        include:
-          - os: ubuntu-22.04
-            compiler: g++-11
-          - os: ubuntu-24.04
-            compiler: g++-13
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
-            cmake \
+            software-properties-common \
             libgtest-dev \
             googletest \
-            git
+            libflatbuffers-dev \
+            flatbuffers-compiler \
+            pkg-config
 
-      - name: Install FlatBuffers
+      - name: Install g++ (for Ubuntu 22.04 / 24.04)
         run: |
-          sudo apt-get install -y flatbuffers-compiler
-          # 如果上面沒有 flatc，也可以從 source 安裝
-          which flatc || {
-            git clone --depth=1 https://github.com/google/flatbuffers.git
-            cd flatbuffers
-            cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
-            make -j$(nproc)
-            sudo make install
-            sudo ldconfig
-            cd ..
-          }
+          if [ "${{ matrix.os }}" = "ubuntu-22.04" ]; then
+            sudo apt-get install -y g++-11
+            echo "CXX=g++-11" >> $GITHUB_ENV
+          else
+            sudo apt-get install -y g++-13
+            echo "CXX=g++-13" >> $GITHUB_ENV
+          fi
+          $CXX --version
 
-      - name: Setup Compiler
+      - name: Verify FlatBuffers
         run: |
-          echo "CXX=${{ matrix.compiler }}" >> $GITHUB_ENV
-          ${{ matrix.compiler }} --version
+          flatc --version
+          pkg-config --cflags flatbuffers || echo "No pkg-config for flatbuffers"
 
       - name: Generate FlatBuffers
         run: make fbs
@@ -61,26 +54,24 @@ jobs:
           make clean
           make test
 
-      - name: Show Test Results
-        if: always()
-        run: cat tests/*.log 2>/dev/null || echo "No detailed log found."
-
-  # 可選：只跑一次較快的測試（用於快速反饋）
   quick-test:
-    name: Quick Test (Ubuntu Latest)
+    name: Quick Test (ubuntu-latest)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install deps
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential libgtest-dev googletest flatbuffers-compiler
+          sudo apt-get install -y \
+            build-essential \
+            g++ \
+            libgtest-dev \
+            googletest \
+            libflatbuffers-dev \
+            flatbuffers-compiler
 
-      - name: Generate FlatBuffers
-        run: make fbs
-
-      - name: Run Tests
+      - name: Generate FlatBuffers & Run Tests
         run: |
           make clean
           make test
