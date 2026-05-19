@@ -7,6 +7,7 @@
 // #include <rte_ring.h>
 #include "generated/order_generated.h"
 
+#include "gtest/gtest_prod.h"
 namespace Exchange {
 
 struct Order
@@ -44,8 +45,17 @@ struct PriceLevel
     }
 };
 
+class OrderBookTest;
+
 class OrderBook
 {
+    friend class OrderBookTest;
+    FRIEND_TEST(OrderBookTest, MultiLevelAndLinkedListStructure);
+    FRIEND_TEST(OrderBookTest, MatchingBehavior);
+    FRIEND_TEST(OrderBookTest, MultiLevelSweep);
+    FRIEND_TEST(OrderBookTest, ModifyCancelFIFOPreservation);
+    
+    std::vector<Order*> getOrdersInLevel(PriceLevel* pl);
 public:
     explicit OrderBook(
         int64_t min_step, 

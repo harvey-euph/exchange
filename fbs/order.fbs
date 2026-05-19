@@ -4,7 +4,7 @@ enum Side : byte { Buy = 0, Sell = 1 }
 
 enum OrderType : byte { Limit = 0, Market = 1, IOC = 2, FOK = 3 /* 可再擴充 */ }
 
-enum OrderAction : byte { New = 0, Cancel = 1, Modify = 2, Replace = 3 }
+enum OrderAction : byte { New = 0, Cancel = 1, Modify = 2 }
 
 table OrderRequest {
     action: OrderAction;

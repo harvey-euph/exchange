@@ -1,0 +1,86 @@
+name: OrderBook CI
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  test:
+    name: Build & Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        compiler: [g++-11, g++-13]
+        include:
+          - os: ubuntu-22.04
+            compiler: g++-11
+          - os: ubuntu-24.04
+            compiler: g++-13
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            libgtest-dev \
+            googletest \
+            git
+
+      - name: Install FlatBuffers
+        run: |
+          sudo apt-get install -y flatbuffers-compiler
+          # 如果上面沒有 flatc，也可以從 source 安裝
+          which flatc || {
+            git clone --depth=1 https://github.com/google/flatbuffers.git
+            cd flatbuffers
+            cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
+            make -j$(nproc)
+            sudo make install
+            sudo ldconfig
+            cd ..
+          }
+
+      - name: Setup Compiler
+        run: |
+          echo "CXX=${{ matrix.compiler }}" >> $GITHUB_ENV
+          ${{ matrix.compiler }} --version
+
+      - name: Generate FlatBuffers
+        run: make fbs
+
+      - name: Build and Run Tests
+        run: |
+          make clean
+          make test
+
+      - name: Show Test Results
+        if: always()
+        run: cat tests/*.log 2>/dev/null || echo "No detailed log found."
+
+  # 可選：只跑一次較快的測試（用於快速反饋）
+  quick-test:
+    name: Quick Test (Ubuntu Latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libgtest-dev googletest flatbuffers-compiler
+
+      - name: Generate FlatBuffers
+        run: make fbs
+
+      - name: Run Tests
+        run: |
+          make clean
+          make test
