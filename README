@@ -1,0 +1,2 @@
+sudo apt install -y flatbuffers-compiler libflatbuffers-dev
+sudo apt install -y libgtest-dev libgmock-dev

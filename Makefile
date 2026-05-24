@@ -4,7 +4,7 @@
 
 PROJECT_NAME := exchange_orderbook
 CXX          := g++
-CXXFLAGS     := -std=c++20 -Wall -Wextra -O3 -march=native -flto -g
+CXXFLAGS     := -std=c++20 -Wall -Wextra -O3 -march=native -flto=auto -g
 CXXFLAGS     += -DNDEBUG
 
 FBS_DIR      := fbs

@@ -1,153 +1,143 @@
-#include <gtest/gtest.h>
-#include "../include/OrderBook.hpp"   // 根據你的目錄結構調整
+#include "gtest/gtest.h"
+#include "../include/OrderBook.hpp"
 
 namespace Exchange {
 
-class OrderBookTest : public ::testing::Test {
+class OrderBookTest : public ::testing::Test
+{
 protected:
-    OrderBook book{1LL, 0LL, 2048};   // min_step=1, offset=10
-
     void SetUp() override {
-        // 如有需要可在此 reset
+        orderbook = std::make_unique<OrderBook>(1, 10000, 65536);
     }
 
-    // ==================== Helper ====================
-    void NewLimit(uint64_t oid, Side side, int64_t price, uint64_t qty) {
-        flatbuffers::FlatBufferBuilder fbb(1024);
-        auto req_offset = CreateOrderRequest(fbb,
-            OrderAction_New,
-            0, oid, 1, 1,
-            side, OrderType_Limit, price, qty, 0, 0
+    std::unique_ptr<OrderBook> orderbook;
+
+    const OrderRequest* CreateRequest(
+        OrderAction action,
+        uint64_t exec_id,
+        uint64_t order_id,
+        uint32_t client_id,
+        Side side,
+        OrderType type,
+        int64_t price,
+        uint64_t quantity,
+        uint64_t visible_qty = 0)
+    {
+        static flatbuffers::FlatBufferBuilder fbb(1024);
+        fbb.Clear();
+
+        auto req = CreateOrderRequest(
+            fbb,
+            action,
+            exec_id,
+            order_id,
+            client_id,
+            1,                    // symbol_id
+            side,
+            type,
+            price,
+            quantity,
+            visible_qty,
+            1000000000ULL
         );
-        fbb.Finish(req_offset);
-        const OrderRequest* req = GetOrderRequest(fbb.GetBufferPointer());
-        book.processRequest(req);
+
+        fbb.Finish(req);
+        return GetOrderRequest(fbb.GetBufferPointer());
     }
 
-    void NewMarket(uint64_t oid, Side side, uint64_t qty) {
-        flatbuffers::FlatBufferBuilder fbb(1024);
-        auto req_offset = CreateOrderRequest(fbb,
-            OrderAction_New,
-            0, oid, 1, 1,
-            side, OrderType_Market, 0, qty, 0, 0
-        );
-        fbb.Finish(req_offset);
-        book.processRequest(GetOrderRequest(fbb.GetBufferPointer()));
-    }
+    void SetupInitialBook() 
+    {
+        std::vector<int64_t> bid_prices = {10500, 10400, 10300, 10200, 10100};
+        for (int64_t p : bid_prices) {
+            for (int i = 0; i < 3; ++i) {
+                const OrderRequest* req = CreateRequest(
+                    OrderAction_New, 10000+i, 20000+p+i, 1,
+                    Side_Buy, OrderType_Limit, p, 100);
+                orderbook->processRequest(req);
+            }
+        }
 
-    void Cancel(uint64_t oid) {
-        flatbuffers::FlatBufferBuilder fbb(1024);
-        auto req_offset = CreateOrderRequest(fbb,
-            OrderAction_Cancel, 0, oid, 1, 1,
-            Side_Buy, OrderType_Limit, 0, 0, 0, 0
-        );
-        fbb.Finish(req_offset);
-        book.processRequest(GetOrderRequest(fbb.GetBufferPointer()));
-    }
-
-    void Modify(uint64_t oid, int64_t new_price, uint64_t new_qty) {
-        flatbuffers::FlatBufferBuilder fbb(1024);
-        auto req_offset = CreateOrderRequest(fbb,
-            OrderAction_Modify, 0, oid, 1, 1,
-            Side_Buy, OrderType_Limit, new_price, new_qty, 0, 0
-        );
-        fbb.Finish(req_offset);
-        book.processRequest(GetOrderRequest(fbb.GetBufferPointer()));
+        std::vector<int64_t> ask_prices = {10600, 10700, 10800, 10900, 11000};
+        for (int64_t p : ask_prices) {
+            for (int i = 0; i < 3; ++i) {
+                const OrderRequest* req = CreateRequest(
+                    OrderAction_New, 30000+i, 40000+p+i, 2,
+                    Side_Sell, OrderType_Limit, p, 100);
+                orderbook->processRequest(req);
+            }
+        }
+        orderbook->showL2();
     }
 };
 
-// ====================== Tests ======================
+// ==================== InsertBidAsk ====================
 
-TEST_F(OrderBookTest, MultiLevelAndLinkedListStructure)
+TEST_F(OrderBookTest, InsertBidAsk)
 {
-    NewLimit(1, Side_Buy, 100, 10);
-    NewLimit(2, Side_Buy, 100, 15);
-    NewLimit(3, Side_Buy, 99,  20);
-    NewLimit(4, Side_Buy, 99,  25);
-    NewLimit(5, Side_Buy, 98,  30);
+    SetupInitialBook();
 
-    EXPECT_EQ(book.active_levels_[Side_Buy].size(), 3);
+    EXPECT_EQ(orderbook->active_levels_[0].size(), 5);
+    EXPECT_EQ(orderbook->active_levels_[1].size(), 5);
 
-    // std::vector<int64_t> expected = {100, 99, 98};
-    // size_t i = 0;
-    // for (auto it = book.active_levels_[Side_Buy].rbegin(); 
-    //      it != book.active_levels_[Side_Buy].rend(); ++it) {
-    //     EXPECT_EQ(book.index_to_price(it->first), expected[i++]);
-    // }
+    EXPECT_NE(orderbook->best_levels_[0], nullptr);
+    EXPECT_NE(orderbook->best_levels_[1], nullptr);
 
-    // for (auto& [idx, pl] : book.active_levels_[Side_Buy]) {
-    //     auto orders = OrderBook::getOrdersInLevel(pl);  // 我們會在下面定義
-    //     EXPECT_GE(orders.size(), 1);
-    // }
+    EXPECT_EQ(orderbook->best_levels_[0]->total_qty, 300);
+    EXPECT_EQ(orderbook->best_levels_[1]->total_qty, 300);
+
+    std::cout << "Initial OrderBook setup completed successfully.\n";
 }
 
-// TEST_F(OrderBookTest, MatchingBehavior) {
-//     NewLimit(10, Side_Buy, 100, 50);
-//     NewLimit(11, Side_Buy, 100, 30);
+// ==================== CancelAndModify ====================
 
-//     NewLimit(12, Side_Sell, 100, 70);  // taker
+TEST_F(OrderBookTest, CancelAndModify)
+{
+    SetupInitialBook();
 
-//     auto* pl = book.getPriceLevelInternal(Side_Buy, 100); // 我們會在 test 裡實作
-//     ASSERT_NE(pl, nullptr);
-//     EXPECT_EQ(pl->total_qty, 30);
-//     EXPECT_EQ(pl->order_count, 1);
+    // Cancel Best Bid 的其中一筆訂單 (order_id = 20000)
+    const OrderRequest* cancel_req = CreateRequest(
+        OrderAction_Cancel, 0, 20000, 1, Side_Buy, OrderType_Limit, 0, 0);
+    orderbook->processRequest(cancel_req);
 
-//     auto orders = OrderBook::getOrdersInLevel(pl);
-//     ASSERT_EQ(orders.size(), 1);
-//     EXPECT_EQ(orders[0]->order_id, 11);
-// }
+    EXPECT_EQ(orderbook->active_orders_.count(20000), 0);
 
-// TEST_F(OrderBookTest, MultiLevelSweep) {
-//     NewLimit(20, Side_Buy, 100, 40);
-//     NewLimit(21, Side_Buy, 99,  50);
-//     NewLimit(22, Side_Buy, 98,  60);
+    // Modify 另一筆訂單：改價 + 改量
+    const OrderRequest* modify_req = CreateRequest(
+        OrderAction_Modify, 0, 20001, 1, Side_Buy, OrderType_Limit, 10450, 250);
+    orderbook->processRequest(modify_req);
 
-//     NewLimit(23, Side_Sell, 100, 200);
+    EXPECT_EQ(orderbook->active_orders_.count(20001), 1);
+}
 
-//     EXPECT_EQ(book.best_levels_[Side_Buy], nullptr);
-// }
+// ==================== MatchSingleLayer ====================
 
-// TEST_F(OrderBookTest, ModifyCancelFIFOPreservation) {
-//     NewLimit(30, Side_Buy, 100, 10);   // A
-//     NewLimit(31, Side_Buy, 100, 20);   // B
-//     NewLimit(32, Side_Buy, 100, 30);   // C
+TEST_F(OrderBookTest, MatchSingleLayer)
+{
+    SetupInitialBook();
 
-//     Cancel(31);
+    // 在 Best Ask 價格 (10600) 掛一個大買單，應該只匹配單一價格層
+    const OrderRequest* big_bid = CreateRequest(
+        OrderAction_New, 9991, 9991, 1, Side_Buy, OrderType_Limit, 10600, 500);
+    orderbook->processRequest(big_bid);
 
-//     auto* pl = book.getPriceLevelInternal(Side_Buy, 100);
-//     auto orders = OrderBook::getOrdersInLevel(pl);
-//     ASSERT_EQ(orders.size(), 2);
-//     EXPECT_EQ(orders[0]->order_id, 30);
-//     EXPECT_EQ(orders[1]->order_id, 32);
+    // 檢查是否發生部分成交
+    EXPECT_EQ(orderbook->active_orders_.count(9991), 1);  // 應該剩下部分數量
+}
 
-//     Modify(30, 100, 15);
-//     orders = OrderBook::getOrdersInLevel(pl);
-//     EXPECT_EQ(orders[0]->order_id, 30);
-//     EXPECT_EQ(orders[0]->qty_remaining, 15);
-// }
+// ==================== MatchingMultiLayer ====================
 
-// // ==================== Test 專用靜態函數 ====================
-// std::vector<Order*> OrderBook::getOrdersInLevel(PriceLevel* pl) {
-//     std::vector<Order*> orders;
-//     if (!pl) return orders;
-//     Order* cur = pl->dummy_head.next;
-//     while (cur != &pl->dummy_tail) {
-//         orders.push_back(cur);
-//         cur = cur->next;
-//     }
-//     return orders;
-// }
+TEST_F(OrderBookTest, MatchingMultiLayer)
+{
+    SetupInitialBook();
 
-// // 如果你不想在 OrderBook 加 getPriceLevelInternal，可以在 test 裡直接這樣寫：
-// PriceLevel* OrderBookTest::getPriceLevelInternal(Side side, int64_t price) {
-//     size_t idx = book.price_to_index(price);
-//     auto it = book.active_levels_[side].find(idx);
-//     return it != book.active_levels_[side].end() ? it->second : nullptr;
-// }
+    // 發一個大賣單，價格很低，應該吃穿多層 Bid
+    const OrderRequest* big_ask = CreateRequest(
+        OrderAction_New, 9992, 9992, 2, Side_Sell, OrderType_Limit, 10100, 2000);
+    orderbook->processRequest(big_ask);
+
+    // 預期最上面幾層 Bid 應該被吃掉
+    // (因為每個 Bid 層只有 300，總共 5 層 = 1500，所以會吃穿 4 層以上)
+    EXPECT_LT(orderbook->active_levels_[0].size(), 5);  // Bid 層數應該減少
+}
 
 } // namespace Exchange
-
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}

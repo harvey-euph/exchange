@@ -50,10 +50,10 @@ class OrderBookTest;
 class OrderBook
 {
     friend class OrderBookTest;
-    FRIEND_TEST(OrderBookTest, MultiLevelAndLinkedListStructure);
-    FRIEND_TEST(OrderBookTest, MatchingBehavior);
-    FRIEND_TEST(OrderBookTest, MultiLevelSweep);
-    FRIEND_TEST(OrderBookTest, ModifyCancelFIFOPreservation);
+    FRIEND_TEST(OrderBookTest, InsertBidAsk);
+    FRIEND_TEST(OrderBookTest, CancelAndModify);
+    FRIEND_TEST(OrderBookTest, MatchSingleLayer);
+    FRIEND_TEST(OrderBookTest, MatchingMultiLayer);
     
     enum class Mode { Normal, Modify };
 public:

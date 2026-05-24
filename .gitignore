@@ -3,3 +3,4 @@
 *.log
 include/generated
 exchange_orderbook
+cachegrind.out*
