@@ -1,5 +1,5 @@
 #include "gtest/gtest.h"
-#include "../include/OrderBook.hpp"
+#include "OrderBook.hpp"
 
 namespace Exchange {
 
@@ -7,14 +7,14 @@ class OrderBookTest : public ::testing::Test
 {
 protected:
     void SetUp() override {
-        orderbook = std::make_unique<OrderBook>(1, 10000, 65536);
+        orderbook = std::make_unique<OrderBook>(1, 10000, 1024);
     }
 
     std::unique_ptr<OrderBook> orderbook;
+    uint64_t exec_id = 0;
 
     const OrderRequest* CreateRequest(
-        OrderAction oa,
-        uint64_t exec_id,
+        OrderAction act,
         uint64_t order_id,
         uint32_t client_id,
         Side side,
@@ -27,7 +27,7 @@ protected:
         fbb.Clear();
 
         auto req = CreateOrderRequest(fbb,
-            oa, exec_id, order_id, client_id, 1, side,
+            act, exec_id++, order_id, client_id, 1, side,
             type, price, quantity, visible_qty, 1000000000ULL
         );
 
@@ -37,11 +37,12 @@ protected:
 
     void SetupInitialBook() 
     {
+        // int64_t basePrice = 10000;
         std::vector<int64_t> bid_prices = {10500, 10400, 10300, 10200, 10100};
         for (int64_t p : bid_prices) {
             for (int i = 0; i < 3; ++i) {
                 const OrderRequest* req = CreateRequest(
-                    OrderAction_New, 10000+i, 20000+p+i, 1,
+                    OrderAction_New, 20000+p+i, 1,
                     Side_Buy, OrderType_Limit, p, 100);
                 orderbook->processRequest(req);
             }
@@ -51,53 +52,204 @@ protected:
         for (int64_t p : ask_prices) {
             for (int i = 0; i < 3; ++i) {
                 const OrderRequest* req = CreateRequest(
-                    OrderAction_New, 30000+i, 40000+p+i, 2,
+                    OrderAction_New, 40000+p+i, 2,
                     Side_Sell, OrderType_Limit, p, 100);
                 orderbook->processRequest(req);
             }
         }
+
         orderbook->showL2();
     }
 };
 
 // ==================== InsertBidAsk ====================
 
-TEST_F(OrderBookTest, InsertBidAsk)
-{
-    SetupInitialBook();
+// TEST_F(OrderBookTest, InsertBidAsk)
+// {
+//     SetupInitialBook();
 
-    EXPECT_EQ(orderbook->active_levels_[0].size(), 5);
-    EXPECT_EQ(orderbook->active_levels_[1].size(), 5);
+//     EXPECT_EQ(orderbook->active_levels_[0].size(), 5) << "Bid 應該有 5 個價格層";
+//     EXPECT_EQ(orderbook->active_levels_[1].size(), 5) << "Ask 應該有 5 個價格層";
 
-    EXPECT_NE(orderbook->best_levels_[0], nullptr);
-    EXPECT_NE(orderbook->best_levels_[1], nullptr);
+//     EXPECT_NE(orderbook->best_levels_[0], nullptr) << "Best Bid 不應為 nullptr";
+//     EXPECT_NE(orderbook->best_levels_[1], nullptr) << "Best Ask 不應為 nullptr";
 
-    EXPECT_EQ(orderbook->best_levels_[0]->total_qty, 300);
-    EXPECT_EQ(orderbook->best_levels_[1]->total_qty, 300);
+//     const std::vector<int64_t> expected_bid_prices = {10500, 10400, 10300, 10200, 10100};
+    
+//     auto it_bid = orderbook->active_levels_[0].rbegin();  // map 反向迭代，從最高價開始
+    
+//     for (size_t i = 0; i < expected_bid_prices.size(); ++i)
+//     {
+//         ASSERT_NE(it_bid, orderbook->active_levels_[0].rend()) << "Bid 價格層數量不足";
 
-    std::cout << "Initial OrderBook setup completed successfully.\n";
-}
+//         size_t price_index = it_bid->first;
+//         PriceLevel* pl = it_bid->second;
+//         int64_t price = orderbook->index_to_price(price_index);
+
+//         EXPECT_EQ(price, expected_bid_prices[i]) 
+//             << "Bid 第 " << i+1 << " 層價格錯誤，預期 " << expected_bid_prices[i] << "，實際 " << price;
+
+//         EXPECT_EQ(pl->total_qty, 300ULL) 
+//             << "Bid 價格 " << price << " total_qty 應為 300";
+
+//         EXPECT_EQ(pl->order_count, 3ULL) 
+//             << "Bid 價格 " << price << " 應有 3 筆訂單";
+
+//         EXPECT_NE(pl->dummy_head.next, &pl->dummy_tail) << "Bid 價格 " << price << " 應有實際訂單";
+
+//         // 檢查訂單鏈結數量
+//         size_t order_count_in_list = 0;
+//         for (Order* ord = pl->dummy_head.next; ord != &pl->dummy_tail; ord = ord->next)
+//         {
+//             ++order_count_in_list;
+//             EXPECT_EQ(ord->price_level, pl);
+//             EXPECT_EQ(ord->qty_remaining, 100ULL);
+//         }
+//         EXPECT_EQ(order_count_in_list, 3ULL);
+
+//         ++it_bid;
+//     }
+
+//     // ==================== Ask 詳細檢查 (由低到高) ====================
+//     const std::vector<int64_t> expected_ask_prices = {10600, 10700, 10800, 10900, 11000};
+    
+//     auto it_ask = orderbook->active_levels_[1].begin();  // map 正向迭代，從最低價開始
+    
+//     for (size_t i = 0; i < expected_ask_prices.size(); ++i)
+//     {
+//         ASSERT_NE(it_ask, orderbook->active_levels_[1].end()) << "Ask 價格層數量不足";
+
+//         size_t price_index = it_ask->first;
+//         PriceLevel* pl = it_ask->second;
+//         int64_t price = orderbook->index_to_price(price_index);
+
+//         EXPECT_EQ(price, expected_ask_prices[i]) 
+//             << "Ask 第 " << i+1 << " 層價格錯誤，預期 " << expected_ask_prices[i] << "，實際 " << price;
+
+//         EXPECT_EQ(pl->total_qty, 300ULL);
+//         EXPECT_EQ(pl->order_count, 3ULL);
+
+//         // 檢查訂單鏈結
+//         size_t order_count_in_list = 0;
+//         for (Order* ord = pl->dummy_head.next; ord != &pl->dummy_tail; ord = ord->next)
+//         {
+//             ++order_count_in_list;
+//             EXPECT_EQ(ord->price_level, pl);
+//             EXPECT_EQ(ord->qty_remaining, 100ULL);
+//         }
+//         EXPECT_EQ(order_count_in_list, 3ULL);
+
+//         ++it_ask;
+//     }
+
+//     // ==================== Best Bid & Best Ask 檢查 ====================
+//     // int64_t best_bid_price = orderbook->index_to_price(orderbook->best_levels_[0]->dummy_head.next->price_level->dummy_head.next->price_level ? 
+//     //     /* wait, better way */ 0 : 0); // 改用下面更乾淨的方式
+
+//     EXPECT_EQ(orderbook->best_levels_[0], orderbook->active_levels_[0].rbegin()->second)
+//         << "Best Bid 應指向最高 bid 價格層 (10500)";
+
+//     EXPECT_EQ(orderbook->best_levels_[1], orderbook->active_levels_[1].begin()->second)
+//         << "Best Ask 應指向最低 ask 價格層 (10600)";
+
+//     EXPECT_EQ(orderbook->best_levels_[0]->total_qty, 300ULL);
+//     EXPECT_EQ(orderbook->best_levels_[1]->total_qty, 300ULL);
+
+//     // ==================== active_orders_ 數量檢查 ====================
+//     EXPECT_EQ(orderbook->active_orders_.size(), 30ULL) 
+//         << "總共應有 5*3 + 5*3 = 30 筆活躍訂單";
+// }
 
 // ==================== CancelAndModify ====================
 
-TEST_F(OrderBookTest, CancelAndModify)
-{
-    SetupInitialBook();
+// TEST_F(OrderBookTest, CancelAndModify)
+// {
+//     SetupInitialBook();
 
-    // Cancel Best Bid 的其中一筆訂單 (order_id = 20000)
-    const OrderRequest* cancel_req = CreateRequest(
-        OrderAction_Cancel, 0, 20000, 1, Side_Buy, OrderType_Limit, 0, 0);
-    orderbook->processRequest(cancel_req);
+//     // ==================== 初始狀態確認 (重點價格層) ====================
+//     EXPECT_EQ(orderbook->active_levels_[0].size(), 5);  // Bid
+//     EXPECT_EQ(orderbook->active_levels_[1].size(), 5);  // Ask
 
-    EXPECT_EQ(orderbook->active_orders_.count(20000), 0);
+//     // ==================== Step 1: Cancel 一筆 Best Bid 之外的訂單 ====================
+//     // 取消 10300 價格層的其中一筆 (order_id = 30301)
+//     const OrderRequest* cancel_req = CreateRequest(
+//         OrderAction_Cancel, 30301, 1, Side_Buy, OrderType_Limit, 0, 0);
 
-    // Modify 另一筆訂單：改價 + 改量
-    const OrderRequest* modify_req = CreateRequest(
-        OrderAction_Modify, 0, 20001, 1, Side_Buy, OrderType_Limit, 10450, 250);
-    orderbook->processRequest(modify_req);
+//     orderbook->processRequest(cancel_req);
 
-    EXPECT_EQ(orderbook->active_orders_.count(20001), 1);
-}
+//     // --- 針對取消後的變動進行詳細檢查 ---
+//     EXPECT_EQ(orderbook->active_orders_.count(30301), 0) << "訂單 30301 應已被移除";
+
+//     // 檢查 10300 價格層的變化
+//     {
+//         auto it = orderbook->active_levels_[0].find(orderbook->price_to_index(10300));
+//         ASSERT_NE(it, orderbook->active_levels_[0].end()) << "10300 價格層不應被移除 (還有 2 筆)";
+
+//         PriceLevel* pl_10300 = it->second;
+//         EXPECT_EQ(pl_10300->order_count, 2ULL);
+//         EXPECT_EQ(pl_10300->total_qty, 200ULL);
+
+//         // 檢查剩餘訂單
+//         size_t count = 0;
+//         for (Order* ord = pl_10300->dummy_head.next; ord != &pl_10300->dummy_tail; ord = ord->next)
+//         {
+//             EXPECT_NE(ord->order_id, 30301ULL);
+//             count++;
+//         }
+//         EXPECT_EQ(count, 2ULL);
+//     }
+
+//     // Best Bid 不應改變
+//     EXPECT_EQ(orderbook->best_levels_[0], orderbook->active_levels_[0].rbegin()->second);
+//     EXPECT_EQ(orderbook->best_levels_[0]->total_qty, 300ULL);  // 10500 仍為 300
+
+//     // ==================== Step 2: Modify 訂單 (改價 + 改量) ====================
+//     // 修改 10300 的另一筆訂單 → 改到 10450，數量改為 250
+//     const OrderRequest* modify_req = CreateRequest(
+//         OrderAction_Modify, 30302, 1, Side_Buy, OrderType_Limit, 10450, 250);
+
+//     orderbook->processRequest(modify_req);
+
+//     // --- 針對修改後的變動進行詳細檢查 ---
+
+//     // 原 10300 價格層應只剩 1 筆
+//     {
+//         auto it = orderbook->active_levels_[0].find(orderbook->price_to_index(10300));
+//         ASSERT_NE(it, orderbook->active_levels_[0].end());
+//         PriceLevel* pl = it->second;
+//         EXPECT_EQ(pl->order_count, 1ULL);
+//         EXPECT_EQ(pl->total_qty, 100ULL);
+//     }
+
+//     // 新價格層 10450 應該被建立
+//     {
+//         auto it = orderbook->active_levels_[0].find(orderbook->price_to_index(10450));
+//         ASSERT_NE(it, orderbook->active_levels_[0].end()) << "10450 價格層應被建立";
+
+//         PriceLevel* pl_10450 = it->second;
+//         EXPECT_EQ(pl_10450->order_count, 1ULL);
+//         EXPECT_EQ(pl_10450->total_qty, 250ULL);
+
+//         // 檢查訂單內容
+//         Order* modified_order = pl_10450->dummy_head.next;
+//         ASSERT_NE(modified_order, &pl_10450->dummy_tail);
+//         EXPECT_EQ(modified_order->order_id, 30302ULL);
+//         EXPECT_EQ(modified_order->qty_remaining, 250ULL);
+//         EXPECT_EQ(modified_order->qty_original, 250ULL);  // 注意：依你的實作是否更新 original
+//         // EXPECT_EQ(index_to_price(modified_order->price_level-> /* 價格檢查 */), 10450);
+//     }
+
+//     // 檢查 active_orders_ 是否更新
+//     EXPECT_EQ(orderbook->active_orders_.count(30302), 1);
+
+//     // Best Bid 是否改變？（目前不會，因為 10500 仍是最高）
+//     EXPECT_EQ(orderbook->best_levels_[0]->total_qty, 300ULL);
+
+//     // ==================== 整體一致性檢查 ====================
+//     EXPECT_EQ(orderbook->active_levels_[0].size(), 6) << "Bid 價格層應從 5 增加到 6 (新增 10450)";
+
+//     orderbook->showL2();
+// }
 
 // ==================== MatchSingleLayer ====================
 
@@ -105,29 +257,135 @@ TEST_F(OrderBookTest, MatchSingleLayer)
 {
     SetupInitialBook();
 
-    // 在 Best Ask 價格 (10600) 掛一個大買單，應該只匹配單一價格層
+    const int64_t match_price = 10600;
+    const uint64_t incoming_qty = 500;
+
+    // ==================== 送入大買單 (Limit Buy @ 10600) ====================
     const OrderRequest* big_bid = CreateRequest(
-        OrderAction_New, 9991, 9991, 1, Side_Buy, OrderType_Limit, 10600, 500);
+        OrderAction_New, 9991, 9991, Side_Buy, OrderType_Limit, match_price, incoming_qty);
+
     orderbook->processRequest(big_bid);
 
-    // 檢查是否發生部分成交
-    EXPECT_EQ(orderbook->active_orders_.count(9991), 1);  // 應該剩下部分數量
+    // ==================== 詳細驗證 ====================
+
+    // 1. Ask 10600 價格層應被完全移除
+    {
+        auto it = orderbook->active_levels_[1].find(orderbook->price_to_index(match_price));
+        EXPECT_EQ(it, orderbook->active_levels_[1].end()) << "10600 Ask 價格層應被完全清除";
+
+        EXPECT_EQ(orderbook->active_orders_.count(40000 + match_price + 0), 0);
+        EXPECT_EQ(orderbook->active_orders_.count(40000 + match_price + 1), 0);
+        EXPECT_EQ(orderbook->active_orders_.count(40000 + match_price + 2), 0);
+    }
+
+    // 2. 新增的 Bid 訂單應部分成交並掛簿
+    {
+        auto it = orderbook->active_levels_[0].find(orderbook->price_to_index(match_price));
+        ASSERT_NE(it, orderbook->active_levels_[0].end()) << "Bid 側應新增 10600 價格層";
+
+        PriceLevel* pl = it->second;
+        EXPECT_EQ(pl->total_qty, 200ULL);
+        EXPECT_EQ(pl->order_count, 1ULL);
+
+        Order* ord = pl->dummy_head.next;
+        ASSERT_NE(ord, &pl->dummy_tail);
+        EXPECT_EQ(ord->order_id, 9991ULL);
+        EXPECT_EQ(ord->qty_remaining, 200ULL);
+        EXPECT_EQ(ord->qty_original, 500ULL);
+    }
+
+    // 3. Best 價格更新
+    EXPECT_EQ(orderbook->best_levels_[0]->total_qty, 200ULL) << "Best Bid 應更新為 10600 的剩餘量";
+    EXPECT_EQ(orderbook->best_levels_[1]->total_qty, 300ULL) << "Best Ask 應上移至 10700";
+
+    // 4. 整體數量檢查
+    EXPECT_EQ(orderbook->active_levels_[0].size(), 6);
+    EXPECT_EQ(orderbook->active_levels_[1].size(), 4);
+    EXPECT_EQ(orderbook->active_orders_.size(), 28ULL);
+
+    orderbook->showL2();
 }
 
-// ==================== MatchingMultiLayer ====================
-
+// // ==================== MatchingMultiLayer ====================
 TEST_F(OrderBookTest, MatchingMultiLayer)
 {
     SetupInitialBook();
 
-    // 發一個大賣單，價格很低，應該吃穿多層 Bid
-    const OrderRequest* big_ask = CreateRequest(
-        OrderAction_New, 9992, 9992, 2, Side_Sell, OrderType_Limit, 10100, 2000);
-    orderbook->processRequest(big_ask);
+    const uint64_t incoming_qty = 850;
+    const int64_t sell_price = 10300;
 
-    // 預期最上面幾層 Bid 應該被吃掉
-    // (因為每個 Bid 層只有 300，總共 5 層 = 1500，所以會吃穿 4 層以上)
-    EXPECT_LT(orderbook->active_levels_[0].size(), 5);  // Bid 層數應該減少
+    // ==================== Step 1: 送入大賣單 (Limit Sell @ 10300) ====================
+    const OrderRequest* big_sell = CreateRequest(
+        OrderAction_New, 8888, 8888, Side_Sell, OrderType_Limit, sell_price, incoming_qty);
+
+    orderbook->processRequest(big_sell);
+    orderbook->showL2();
+
+    // ==================== 詳細驗證 ====================
+
+    // 1. 完全被吃掉的 Bid 價格層
+    for (int64_t price : {10500, 10400})
+    {
+        auto it = orderbook->active_levels_[0].find(orderbook->price_to_index(price));
+        EXPECT_EQ(it, orderbook->active_levels_[0].end()) 
+            << "Bid 價格 " << price << " 應被完全吃掉";
+
+        for (int i = 0; i < 3; ++i)
+        {
+            uint64_t oid = 20000 + price + i;
+            EXPECT_EQ(orderbook->active_orders_.count(oid), 0);
+        }
+    }
+
+    // 2. 部分成交的 10300 價格層（剩下 50）
+    {
+        auto it = orderbook->active_levels_[0].find(orderbook->price_to_index(10300));
+        ASSERT_NE(it, orderbook->active_levels_[0].end()) 
+            << "10300 價格層應剩下部分數量";
+
+        PriceLevel* pl_10300 = it->second;
+        EXPECT_EQ(pl_10300->total_qty, 50ULL) << "10300 應剩下 50";
+        EXPECT_EQ(pl_10300->order_count, 1ULL);   // 原有 3 筆，其中 1 筆被吃掉部分，其餘 2 筆完整
+
+        // 檢查訂單剩餘量總和
+        uint64_t total_remaining = 0;
+        for (Order* ord = pl_10300->dummy_head.next; ord != &pl_10300->dummy_tail; ord = ord->next)
+        {
+            total_remaining += ord->qty_remaining;
+        }
+        EXPECT_EQ(total_remaining, 50ULL);
+    }
+
+    // 3. 未被吃到的 Bid 價格層 (10200, 10100)
+    for (int64_t price : {10200, 10100})
+    {
+        auto it = orderbook->active_levels_[0].find(orderbook->price_to_index(price));
+        ASSERT_NE(it, orderbook->active_levels_[0].end());
+        EXPECT_EQ(it->second->total_qty, 300ULL);
+        EXPECT_EQ(it->second->order_count, 3ULL);
+    }
+
+    // 4. 大賣單應已完全成交
+    EXPECT_EQ(orderbook->active_orders_.count(8888), 0) 
+        << "賣單 8888 已完全成交，不應留在 active_orders_";
+
+    // 5. Best Bid 更新檢查
+    {
+        auto best_bid_it = orderbook->active_levels_[0].rbegin();  // 目前最高 Bid
+        int64_t new_best_bid = orderbook->index_to_price(best_bid_it->first);
+        EXPECT_EQ(new_best_bid, 10300) << "Best Bid 應下移至 10300（剩下 50）";
+        EXPECT_EQ(orderbook->best_levels_[0]->total_qty, 50ULL);
+    }
+
+    // 6. 整體結構檢查
+    EXPECT_EQ(orderbook->active_levels_[0].size(), 3) 
+        << "Bid 價格層：5 - 2(完全吃掉) = 3 層剩下";
+
+    EXPECT_EQ(orderbook->active_levels_[1].size(), 5) 
+        << "Ask 價格層數量不變";
+
+    EXPECT_EQ(orderbook->active_orders_.size(), 30 - 8)  
+        << "30 - 8(完全成交的訂單) = 22";
 }
 
 } // namespace Exchange

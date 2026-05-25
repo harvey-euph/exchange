@@ -200,9 +200,12 @@ void OrderBook::handleCancelOrder(const OrderRequest* req)
 
     active_orders_.erase(o->order_id);
     removeOrderFromLevel(o);
+
+    PriceLevel *pl = o->price_level;
+    pl->total_qty -= o->qty_remaining;
    
-    if (!o->price_level->order_count) 
-        removePriceLevel(o->price_level);
+    if (!pl->order_count) 
+        removePriceLevel(pl);
     
     delete o;
 }
