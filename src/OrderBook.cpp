@@ -31,9 +31,12 @@ OrderBook::OrderBook(
 
 OrderBook::~OrderBook() {}
 
-void OrderBook::send_reject(const OrderRequest* req, std::string reason /* TODO: change to enum */)
+void OrderBook::send_reject(const OrderRequest* req, RejectCode code)
 {
-    printf("[REJECT] client_id=%u reason=%s\n", req->client_id(), reason.c_str());
+    printf("[REJECT] client_id=%u code=%s(%d)\n",
+           req->client_id(),
+           EnumNameRejectCode(code),
+           static_cast<int>(code));
 }
 
 void OrderBook::send_acked(const OrderRequest* req)
@@ -88,25 +91,33 @@ void OrderBook::processRequest(const OrderRequest* req)
 
     printOrderRequest(req);
 
-    if (req->action() == OrderAction_Cancel) {
-        handleCancelOrder<Mode::Normal>(req);
+    switch (req->action()) {
+    case OrderAction_Cancel:
+        handleCancelOrder(req);
         return;
-    }
 
-    if (price_invalid(req->price())) {
-        send_reject(req, "Price invalid");
-        return;
-    }
-
-    if (req->action() == OrderAction_Modify) {
+    case OrderAction_Modify:
+        if (req->price() && price_invalid(req->price())) {
+            send_reject(req, RejectCode_PriceInvalid);
+            return;
+        }
         handleModifyOrder(req);
         return;
+
+    case OrderAction_New:
+        if (price_invalid(req->price())) {
+            send_reject(req, RejectCode_PriceInvalid);
+            return;
+        }
+        handleNewOrder(req);
+        return;
+
+    default:
+        send_reject(req, RejectCode_InvalidAction);
+        return;
     }
-    
-    handleNewOrder<Mode::Normal>(req);
 }
 
-template <OrderBook::Mode m>
 void OrderBook::handleNewOrder(const OrderRequest* req)
 {
     send_acked(req);
@@ -185,12 +196,11 @@ void OrderBook::handleNewOrder(const OrderRequest* req)
     active_orders_[incoming->order_id] = incoming;
 }
 
-template <OrderBook::Mode m>
 void OrderBook::handleCancelOrder(const OrderRequest* req)
 {
     auto it = active_orders_.find(req->order_id());
     if (it == active_orders_.end()) {
-        send_reject(req, "Order Not found");
+        send_reject(req, RejectCode_OrderNotFound);
         return;
     }
     // send_cancelled(req);
@@ -213,35 +223,37 @@ void OrderBook::handleModifyOrder(const OrderRequest* req)
 {
     auto it = active_orders_.find(req->order_id());
     if (it == active_orders_.end()) {
-        send_reject(req, "Order Not found");
+        send_reject(req, RejectCode_OrderNotFound);
         return;
     }
 
     Order *o = it->second;
     PriceLevel *pl = o->price_level;
     PriceLevel *target = req->price() ? &price_array_[price_to_index(req->price())] : pl;
-    int64_t qty_diff = req->quantity()? 
-                        (int64_t)req->quantity() - (int64_t)o->qty_original : 0;
+    int64_t qty_diff = req->quantity()
+        ? static_cast<int64_t>(req->quantity()) - static_cast<int64_t>(o->qty_original)
+        : 0;
 
-    if (pl == target)
-    {
-        if (!qty_diff)
-        {
+    if (pl == target) {
+        if (!qty_diff) {
             std::cout << "Condition unchanged.\n";
-        } 
-        else if (qty_diff < 0) 
-        {
-            if ((uint64_t)-qty_diff < o->qty_remaining) {
-                // cancel remaining
-                return;
-            }
-            o->qty_remaining += qty_diff;
-            o->qty_original  += qty_diff;
+            return;
         }
+
+        const uint64_t executed_qty = o->qty_original - o->qty_remaining;
+        const uint64_t new_qty = req->quantity();
+        if (new_qty < executed_qty) {
+            send_reject(req, RejectCode_InvalidModify);
+            return;
+        }
+
+        pl->total_qty += qty_diff;
+        o->qty_remaining = new_qty - executed_qty;
+        o->qty_original = new_qty;
         return;
     }
-    handleCancelOrder<Mode::Modify>(req);
-    handleNewOrder<Mode::Modify>(req);
+    handleCancelOrder(req);
+    handleNewOrder(req);
 }
 
 void OrderBook::showL2(size_t depth)
