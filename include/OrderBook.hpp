@@ -52,6 +52,7 @@ class OrderBook
     friend class OrderBookTest;
     FRIEND_TEST(OrderBookTest, InsertBidAsk);
     FRIEND_TEST(OrderBookTest, CancelAndModify);
+    FRIEND_TEST(OrderBookTest, CancelFullLevelMaintainsPriceLinks);
     FRIEND_TEST(OrderBookTest, MatchSingleLayer);
     FRIEND_TEST(OrderBookTest, MatchingMultiLayer);
     

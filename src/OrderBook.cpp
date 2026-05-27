@@ -171,7 +171,6 @@ void OrderBook::handleNewOrder(const OrderRequest* req)
     //
     if (incoming->qty_remaining == 0)
     {
-        // printf("\n%s Deleting incoming: %p\n", __func__, incoming);
         delete incoming;
         return;
     }
@@ -220,8 +219,9 @@ void OrderBook::handleModifyOrder(const OrderRequest* req)
 
     Order *o = it->second;
     PriceLevel *pl = o->price_level;
-    PriceLevel *target = &price_array_[price_to_index(req->price())];
-    int64_t qty_diff = (int64_t)req->quantity() - (int64_t)o->qty_original;
+    PriceLevel *target = req->price() ? &price_array_[price_to_index(req->price())] : pl;
+    int64_t qty_diff = req->quantity()? 
+                        (int64_t)req->quantity() - (int64_t)o->qty_original : 0;
 
     if (pl == target)
     {
@@ -238,6 +238,7 @@ void OrderBook::handleModifyOrder(const OrderRequest* req)
             o->qty_remaining += qty_diff;
             o->qty_original  += qty_diff;
         }
+        return;
     }
     handleCancelOrder<Mode::Modify>(req);
     handleNewOrder<Mode::Modify>(req);
@@ -331,15 +332,34 @@ void OrderBook::removeOrderFromLevel(Order *o)
 
 void OrderBook::removePriceLevel(PriceLevel *pl)
 {
-    if (pl->worse) pl->worse->better = pl->worse;
-    if (pl->better) pl->better->worse = pl->better;
+    if (!pl) return;
 
-    if (best_levels_[0] && pl <= best_levels_[0])
-    {
-        active_levels_[0].erase(pl - price_array_.data());
-    } else {
-        active_levels_[1].erase(pl - price_array_.data());
+    const size_t price_idx = pl - price_array_.data();
+
+    int side = -1;
+    for (int s = 0; s < 2; ++s) {
+        auto it = active_levels_[s].find(price_idx);
+        if (it != active_levels_[s].end() && it->second == pl) {
+            side = s;
+            break;
+        }
     }
+
+    if (side == -1) {
+        return;
+    }
+
+    if (pl->better) {
+        pl->better->worse = pl->worse;
+    } else {
+        best_levels_[side] = pl->worse;
+    }
+
+    if (pl->worse) {
+        pl->worse->better = pl->better;
+    }
+
+    active_levels_[side].erase(price_idx);
 }
 
 // void OrderBook::checkPriceLevelConsistent(size_t price_index)

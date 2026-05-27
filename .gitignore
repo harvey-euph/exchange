@@ -2,6 +2,5 @@
 *.o
 *.log
 include/fbs
-exchange_orderbook
 cachegrind.out*
 build

@@ -12,7 +12,7 @@ int main()
     OrderBook ob(10000, 2000, 8192);
     
     OrderRequestReader reader;
-    reader.loadFromCSV("data/testReqs.csv");
+    reader.loadFromCSV("benchmarks/bmark1.csv");
     std::vector<const OrderRequest*> vec = reader.getRequests();
     std::queue<const OrderRequest*> q;
     for (size_t i = 0; i < vec.size(); i++) q.push(vec[i]);
