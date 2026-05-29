@@ -45,6 +45,7 @@ OrderBook::~OrderBook() {}
 Order* OrderBook::createOrder(const OrderRequest* req)
 {
     return new Order {
+        req->exec_id(),
         req->order_id(),
         req->client_id(),
         req->q(),
@@ -62,6 +63,16 @@ void OrderBook::processRequest(const OrderRequest* req)
     if (!req) {
         return;
     }
+
+    std::cout << "[OrderBook] Processing Request: action=" << EnumNameOrderAction(req->action())
+              << ", order_id=" << req->order_id()
+              << ", client_id=" << req->client_id()
+              << ", symbol_id=" << req->symbol_id()
+              << ", side=" << (req->side() == Side_Buy ? "Buy" : "Sell")
+              << ", price=" << req->p()
+              << ", qty=" << req->q()
+              << ", exec_id=" << req->exec_id()
+              << std::endl;
 
     reporter_->onRequest(req);
 
@@ -94,6 +105,7 @@ void OrderBook::processRequest(const OrderRequest* req)
 
 void OrderBook::handleNewOrder(const OrderRequest* req, bool report_ack)
 {
+    std::cout << "[OrderBook] New Order: order_id=" << req->order_id() << " price=" << req->p() << " qty=" << req->q() << std::endl;
     if (report_ack) {
         reporter_->onAck(req, price_to_index(req->p()));
     }
@@ -184,6 +196,7 @@ void OrderBook::handleNewOrder(const OrderRequest* req, bool report_ack)
 
 void OrderBook::handleCancelOrder(const OrderRequest* req, bool report_cancelled)
 {
+    std::cout << "[OrderBook] Cancel Order: order_id=" << req->order_id() << std::endl;
     auto it = active_orders_.find(req->order_id());
     if (it == active_orders_.end()) {
         reporter_->onReject(req, RejectCode_OrderNotFound);
@@ -215,6 +228,7 @@ void OrderBook::handleCancelOrder(const OrderRequest* req, bool report_cancelled
 
 void OrderBook::handleModifyOrder(const OrderRequest* req)
 {
+    std::cout << "[OrderBook] Modify Order: order_id=" << req->order_id() << " new_price=" << req->p() << " new_qty=" << req->q() << std::endl;
     auto it = active_orders_.find(req->order_id());
     if (it == active_orders_.end()) {
         reporter_->onReject(req, RejectCode_OrderNotFound);

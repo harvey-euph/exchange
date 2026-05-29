@@ -1,6 +1,6 @@
 CXX := g++
 CXXFLAGS := -std=c++20 -Wall -Wextra -MMD -MP
-INCLUDES := -Iinclude
+INCLUDES := -Iinclude -I/home/harvey/vcpkg/installed/x64-linux/include
 
 BUILD_DIR := build
 SRC_DIR := src
@@ -8,7 +8,7 @@ APP_DIR := app
 TEST_DIR := tests
 FBS_DIR := fbs
 FBS_OUT := include/fbs
-LDFLAGS :=
+LDFLAGS := -L/home/harvey/vcpkg/installed/x64-linux/lib
 LDLIBS := -lgtest -lgtest_main -pthread
 
 # -----------------------------------------------------------------------------
@@ -55,7 +55,7 @@ all: $(FBS_GENERATED) $(APP_TARGETS)
 
 $(BUILD_DIR)/app/%: $(APP_DIR)/%.cpp $(SRC_OBJECTS) $(FBS_GENERATED)
 	@mkdir -p $(BUILD_DIR)/app
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $< $(SRC_OBJECTS) -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $< $(SRC_OBJECTS) $(LDFLAGS) $(LDLIBS) -o $@
 
 # -----------------------------------------------------------------------------
 # Build Tests

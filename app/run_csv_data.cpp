@@ -50,6 +50,7 @@ int main(int argc, char** argv)
         total_cycles += (end - start);
         ++request_count;
         // ob.showL2();
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
     if (request_count) {

@@ -13,6 +13,7 @@ namespace Exchange {
 
 struct Order
 {
+    uint64_t exec_id;
     uint64_t order_id;
     uint32_t client_id;
     uint64_t qty_original;

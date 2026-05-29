@@ -54,7 +54,6 @@ bool L2Updater::update(uint32_t symbol_id, Side side, int64_t price, uint64_t qt
         // Ring 已滿或寫入失敗
         return false; 
     }
-    std::cout << "Enqueued!!!!!!!!!!!!" <<std::endl;
     return true;
 }
 

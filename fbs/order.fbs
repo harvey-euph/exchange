@@ -25,6 +25,8 @@ table OrderResponse
 {
     exec_type: ExecType;
     order_id: ulong;          // Reuse for modify/cancel, Unique universely
+    client_id: uint;
+    exec_id: ulong;           // Correlate with OrderRequest.exec_id
     symbol_id: uint;
     p: long;
     q: ulong;
