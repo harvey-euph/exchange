@@ -2,9 +2,14 @@
 #include <boost/beast/websocket.hpp>
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/awaitable.hpp>
+#include <boost/asio/co_spawn.hpp>
+#include <boost/asio/use_awaitable.hpp>
+#include <boost/asio/detached.hpp>
 #include <iostream>
 #include <string>
 #include <thread>
+#include <mutex>
 #include "fbs/order_generated.h"
 #include "L2Book.hpp"
 
@@ -35,6 +40,31 @@ void print_book(const Exchange::L2Book& book) {
     std::cout << "------------------------------\n";
 }
 
+net::awaitable<void> run_client(std::string host, std::string port, uint32_t symbol_id, Exchange::L2Book& book) {
+    auto executor = co_await net::this_coro::executor;
+    tcp::resolver resolver{executor};
+    websocket::stream<beast::tcp_stream> ws{executor};
+
+    auto const results = co_await resolver.async_resolve(host, port, net::use_awaitable);
+    co_await beast::get_lowest_layer(ws).async_connect(results, net::use_awaitable);
+
+    co_await ws.async_handshake(host, "/", net::use_awaitable);
+    std::cout << "[WS Client] Connected to " << host << ":" << port << std::endl;
+
+    // Subscribe to symbol
+    std::string sub_msg = "sub " + std::to_string(symbol_id);
+    co_await ws.async_write(net::buffer(sub_msg), net::use_awaitable);
+    std::cout << "[WS Client] Subscribed to symbol " << symbol_id << std::endl;
+
+    for (;;) {
+        beast::flat_buffer buffer;
+        co_await ws.async_read(buffer, net::use_awaitable);
+        
+        auto l2_update = flatbuffers::GetRoot<Exchange::L2Update>(buffer.data().data());
+        book.update(l2_update->side(), l2_update->p(), l2_update->q());
+    }
+}
+
 int main(int argc, char** argv)
 {
     try {
@@ -47,19 +77,6 @@ int main(int argc, char** argv)
         if (argc > 3) symbol_id = std::stoul(argv[3]);
 
         net::io_context ioc;
-        tcp::resolver resolver{ioc};
-        websocket::stream<beast::tcp_stream> ws{ioc};
-
-        auto const results = resolver.resolve(host, port);
-        beast::get_lowest_layer(ws).connect(results);
-
-        ws.handshake(host, "/");
-        std::cout << "[WS Client] Connected to " << host << ":" << port << std::endl;
-
-        // Subscribe to symbol
-        std::string sub_msg = "sub " + std::to_string(symbol_id);
-        ws.write(net::buffer(sub_msg));
-        std::cout << "[WS Client] Subscribed to symbol " << symbol_id << std::endl;
 
         Exchange::L2Book book;
         book.symbol_id = symbol_id;
@@ -72,13 +89,17 @@ int main(int argc, char** argv)
         });
         display_thread.detach();
 
-        for (;;) {
-            beast::flat_buffer buffer;
-            ws.read(buffer);
-            
-            auto l2_update = flatbuffers::GetRoot<Exchange::L2Update>(buffer.data().data());
-            book.update(l2_update->side(), l2_update->p(), l2_update->q());
-        }
+        net::co_spawn(ioc, run_client(host, port, symbol_id, book), [](std::exception_ptr e) {
+            if (e) {
+                try {
+                    std::rethrow_exception(e);
+                } catch (std::exception const& ex) {
+                    std::cerr << "[WS Client] Error in coroutine: " << ex.what() << std::endl;
+                }
+            }
+        });
+
+        ioc.run();
     }
     catch (std::exception const& e) {
         std::cerr << "[WS Client] Error: " << e.what() << std::endl;

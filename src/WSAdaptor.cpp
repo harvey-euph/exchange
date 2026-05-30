@@ -4,11 +4,16 @@
 #include <boost/asio/dispatch.hpp>
 #include <boost/asio/strand.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/awaitable.hpp>
+#include <boost/asio/co_spawn.hpp>
+#include <boost/asio/use_awaitable.hpp>
+#include <boost/asio/detached.hpp>
 #include <boost/core/ignore_unused.hpp>
 #include <set>
 #include <mutex>
 #include <queue>
 #include <cstdio>
+#include <iostream>
 
 namespace beast = boost::beast;
 namespace websocket = beast::websocket;
@@ -45,56 +50,48 @@ public:
 
     bool is_closed() const { return closed_; }
 
-    void run() {
-        net::dispatch(ws_.get_executor(),
-            beast::bind_front_handler(&WSSession::on_run, shared_from_this()));
-    }
+    net::awaitable<void> start() {
+        try {
+            ws_.set_option(websocket::stream_base::timeout::suggested(beast::role_type::server));
+            ws_.binary(true);
 
-    void on_run() {
-        ws_.set_option(websocket::stream_base::timeout::suggested(beast::role_type::server));
-        ws_.binary(true);
-        ws_.async_accept(beast::bind_front_handler(&WSSession::on_accept, shared_from_this()));
-    }
+            co_await ws_.async_accept(net::use_awaitable);
 
-    void on_accept(beast::error_code ec) {
-        if (ec) {
+            // Spawn read loop
+            net::co_spawn(ws_.get_executor(), read_loop(), net::detached);
+        } catch (std::exception const& e) {
             closed_ = true;
-            return;
         }
-        do_read();
     }
 
-    void do_read() {
-        ws_.async_read(buffer_, beast::bind_front_handler(&WSSession::on_read, shared_from_this()));
-    }
-
-    void on_read(beast::error_code ec, std::size_t bytes_transferred) {
-        boost::ignore_unused(bytes_transferred);
-        if (ec) {
-            closed_ = true;
-            return;
-        }
-
-        std::string msg = beast::buffers_to_string(buffer_.data());
-        buffer_.consume(buffer_.size());
-        
-        {
-            std::lock_guard<std::mutex> lock(sub_mutex_);
-            if (msg.find("sub ") == 0) {
-                try {
-                    uint32_t sym = std::stoul(msg.substr(4));
-                    subscriptions_.insert(sym);
-                    if (sub_handler_) sub_handler_(shared_from_this(), sym, true);
-                } catch (...) {}
-            } else if (msg.find("unsub ") == 0) {
-                try {
-                    uint32_t sym = std::stoul(msg.substr(6));
-                    subscriptions_.erase(sym);
-                    if (sub_handler_) sub_handler_(shared_from_this(), sym, false);
-                } catch (...) {}
+    net::awaitable<void> read_loop() {
+        try {
+            for (;;) {
+                co_await ws_.async_read(buffer_, net::use_awaitable);
+                
+                std::string msg = beast::buffers_to_string(buffer_.data());
+                buffer_.consume(buffer_.size());
+                
+                {
+                    std::lock_guard<std::mutex> lock(sub_mutex_);
+                    if (msg.find("sub ") == 0) {
+                        try {
+                            uint32_t sym = std::stoul(msg.substr(4));
+                            subscriptions_.insert(sym);
+                            if (sub_handler_) sub_handler_(shared_from_this(), sym, true);
+                        } catch (...) {}
+                    } else if (msg.find("unsub ") == 0) {
+                        try {
+                            uint32_t sym = std::stoul(msg.substr(6));
+                            subscriptions_.erase(sym);
+                            if (sub_handler_) sub_handler_(shared_from_this(), sym, false);
+                        } catch (...) {}
+                    }
+                }
             }
+        } catch (std::exception const& e) {
+            closed_ = true;
         }
-        do_read();
     }
 
     void send(std::string data, uint32_t symbol_id, bool bypass_sub_check = false) {
@@ -113,30 +110,27 @@ public:
                 write_queue_.push(std::move(data));
             }
             if (!write_in_progress) {
-                do_write();
+                net::co_spawn(ws_.get_executor(), write_loop(), net::detached);
             }
         });
     }
 
-    void do_write() {
-        std::string* next_msg = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(write_mutex_);
-            if (write_queue_.empty()) return;
-            next_msg = &write_queue_.front();
-        }
+    net::awaitable<void> write_loop() {
+        try {
+            for (;;) {
+                std::string msg;
+                {
+                    std::lock_guard<std::mutex> lock(write_mutex_);
+                    if (write_queue_.empty()) co_return;
+                    msg = std::move(write_queue_.front());
+                    write_queue_.pop();
+                }
 
-        ws_.async_write(net::buffer(*next_msg), [this, self = shared_from_this()](beast::error_code ec, std::size_t) {
-            if (ec) {
-                closed_ = true;
-                return;
+                co_await ws_.async_write(net::buffer(msg), net::use_awaitable);
             }
-            {
-                std::lock_guard<std::mutex> lock(write_mutex_);
-                write_queue_.pop();
-            }
-            do_write();
-        });
+        } catch (std::exception const& e) {
+            closed_ = true;
+        }
     }
 };
 
@@ -162,23 +156,21 @@ public:
         sub_handler_ = handler;
     }
 
-    void run() { do_accept(); }
-
-    void do_accept() {
-        acceptor_.async_accept(net::make_strand(ioc_),
-            beast::bind_front_handler(&WSListener::on_accept, shared_from_this()));
-    }
-
-    void on_accept(beast::error_code ec, tcp::socket socket) {
-        if (!ec) {
-            auto session = std::make_shared<WSSession>(std::move(socket), sub_handler_);
-            {
-                std::lock_guard<std::mutex> lock(session_mutex_);
-                sessions_.insert(session);
+    net::awaitable<void> run() {
+        try {
+            for (;;) {
+                tcp::socket socket = co_await acceptor_.async_accept(net::use_awaitable);
+                
+                auto session = std::make_shared<WSSession>(std::move(socket), sub_handler_);
+                {
+                    std::lock_guard<std::mutex> lock(session_mutex_);
+                    sessions_.insert(session);
+                }
+                net::co_spawn(ioc_, session->start(), net::detached);
             }
-            session->run();
+        } catch (std::exception const& e) {
+            // Log or handle error
         }
-        do_accept();
     }
 
     void broadcast(const std::string& data, uint32_t symbol_id) {
@@ -197,7 +189,9 @@ public:
 WSAdaptor::WSAdaptor(int port) {
     auto const address = net::ip::make_address("0.0.0.0");
     listener_ = std::make_shared<WSListener>(ioc_, tcp::endpoint{address, static_cast<unsigned short>(port)});
-    listener_->run();
+    
+    net::co_spawn(ioc_, listener_->run(), net::detached);
+    
     ioc_thread_ = std::thread([this]() { ioc_.run(); });
 }
 
