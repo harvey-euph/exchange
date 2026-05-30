@@ -58,10 +58,12 @@ public:
             ws_.binary(true);
 
             co_await ws_.async_accept(net::use_awaitable);
+            std::cout << "[WSSession] WebSocket Handshake successful for " << remote_info_ << std::endl;
 
             // Spawn read loop
             net::co_spawn(ws_.get_executor(), read_loop(), net::detached);
         } catch (std::exception const& e) {
+            std::cerr << "[WSSession] Handshake error for " << remote_info_ << ": " << e.what() << std::endl;
             closed_ = true;
         }
     }
@@ -94,6 +96,7 @@ public:
                 }
             }
         } catch (std::exception const& e) {
+            std::cout << "[WSSession] Read loop ending for " << remote_info_ << " (" << e.what() << ")" << std::endl;
             closed_ = true;
         }
     }
@@ -144,6 +147,7 @@ private:
                 co_await ws_.async_write(net::buffer(msg), net::use_awaitable);
             }
         } catch (std::exception const& e) {
+            std::cerr << "[WSSession] Write error for " << remote_info_ << ": " << e.what() << std::endl;
             {
                 std::lock_guard<std::mutex> lock(write_mutex_);
                 writing_ = false;
@@ -170,6 +174,11 @@ public:
         acceptor_.set_option(net::socket_base::reuse_address(true), ec);
         acceptor_.bind(endpoint, ec);
         acceptor_.listen(net::socket_base::max_listen_connections, ec);
+        if (ec) {
+            std::cerr << "[WSListener] Failed to listen on " << endpoint << ": " << ec.message() << std::endl;
+        } else {
+            std::cout << "[WSListener] Listening on " << endpoint << std::endl;
+        }
     }
 
     void set_subscribe_handler(WSAdaptor::SubscribeHandler handler) {
@@ -186,6 +195,7 @@ public:
                 tcp::socket socket = co_await acceptor_.async_accept(net::use_awaitable);
                 
                 auto session = std::make_shared<WSSession>(std::move(socket), sub_handler_, msg_handler_);
+                std::cout << "[WSListener] Accepted new connection. Starting session..." << std::endl;
                 {
                     std::lock_guard<std::mutex> lock(session_mutex_);
                     sessions_.insert(session);
@@ -193,7 +203,7 @@ public:
                 net::co_spawn(ioc_, session->start(), net::detached);
             }
         } catch (std::exception const& e) {
-            // Log or handle error
+            std::cerr << "[WSListener] Accept loop error: " << e.what() << std::endl;
         }
     }
 
