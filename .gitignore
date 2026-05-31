@@ -8,3 +8,4 @@ build
 .codex
 data/*
 !data/basic.csv
+.run_service.pid

@@ -58,7 +58,7 @@ done
 
 echo "------------------------------------------------"
 echo "Monitoring started. Logs in $LOG_DIR/"
-echo "To stop, press Ctrl+C or run: ./stop_service"
+echo "To stop, press Ctrl+C"
 echo "------------------------------------------------"
 
 while true; do
