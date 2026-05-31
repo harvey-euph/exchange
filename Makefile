@@ -30,13 +30,10 @@ SRC_DEPS := $(SRC_OBJECTS:.o=.d)
 # App Executables
 # -----------------------------------------------------------------------------
 
-APP_CLIENT_SOURCES := $(wildcard $(APP_DIR)/client/*.cpp)
-APP_SERVER_SOURCES := $(wildcard $(APP_DIR)/server/*.cpp)
+APP_SERVER_SOURCES := $(wildcard $(APP_DIR)/*.cpp)
+APP_SERVER_TARGETS := $(patsubst $(APP_DIR)/%.cpp,$(BUILD_DIR)/app/%,$(APP_SERVER_SOURCES))
 
-APP_CLIENT_TARGETS := $(patsubst $(APP_DIR)/client/%.cpp,$(BUILD_DIR)/app/client/%,$(APP_CLIENT_SOURCES))
-APP_SERVER_TARGETS := $(patsubst $(APP_DIR)/server/%.cpp,$(BUILD_DIR)/app/server/%,$(APP_SERVER_SOURCES))
-
-APP_TARGETS := $(APP_CLIENT_TARGETS) $(APP_SERVER_TARGETS)
+APP_TARGETS := $(APP_SERVER_TARGETS)
 
 # -----------------------------------------------------------------------------
 # Test Executables
@@ -61,8 +58,8 @@ $(BUILD_DIR)/app/client/%: $(APP_DIR)/client/%.cpp $(SRC_OBJECTS) $(FBS_GENERATE
 	@mkdir -p $(BUILD_DIR)/app/client
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $< $(SRC_OBJECTS) $(LDFLAGS) $(LDLIBS) -o $@
 
-$(BUILD_DIR)/app/server/%: $(APP_DIR)/server/%.cpp $(SRC_OBJECTS) $(FBS_GENERATED)
-	@mkdir -p $(BUILD_DIR)/app/server
+$(BUILD_DIR)/app/%: $(APP_DIR)/%.cpp $(SRC_OBJECTS) $(FBS_GENERATED)
+	@mkdir -p $(BUILD_DIR)/app
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $< $(SRC_OBJECTS) $(LDFLAGS) $(LDLIBS) -o $@
 
 # -----------------------------------------------------------------------------

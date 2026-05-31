@@ -11,11 +11,11 @@ echo "Starting Exchange Services from $PROJECT_ROOT..."
 
 declare -A SERVICES
 SERVICES=(
-    ["Order Core"]="build/app/server/ser_order_core"
-    ["HTTP Order Accepter"]="build/app/server/ser_http_accepter"
-    ["Client Manager"]="build/app/server/ser_client_manager"
-    ["L2 Publisher"]="build/app/server/ser_l2_publisher"
-    ["L3 Publisher"]="build/app/server/ser_l3_publisher"
+    ["Order Core"]="build/app/order_core"
+    ["HTTP Order Accepter"]="build/app/http_accepter"
+    ["Client Manager"]="build/app/client_manager"
+    ["L2 Publisher"]="build/app/l2_publisher"
+    ["L3 Publisher"]="build/app/l3_publisher"
 )
 
 declare -A SERVICE_LOGS
@@ -41,7 +41,7 @@ start_service() {
 
 stop_all() {
     echo -e "\nStopping all services..."
-    pkill -f "build/app/server/"
+    pkill -f "build/app/"
     rm -f /dev/shm/L2_UPDATE_RING /dev/shm/L3_UPDATE_RING /dev/shm/ORDER_REQUEST /dev/shm/ORDER_RESPONSE
     rm -f "$PID_FILE"
     exit 0
