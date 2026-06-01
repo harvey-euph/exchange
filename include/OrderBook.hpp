@@ -8,28 +8,10 @@
 #include "L3Updater.hpp"
 #include "fbs/order_generated.h"
 #include "ExecutionReporter.hpp"
+#include "Order.hpp"
 
 #include "gtest/gtest_prod.h"
 namespace Exchange {
-
-struct Order
-{
-    uint64_t exec_id;
-    uint64_t order_id;
-    uint32_t client_id;
-    uint64_t qty_original;
-    uint64_t qty_remaining;
-    // uint64_t qty_visible;  // For Iceberg
-
-    OrderType type; // Only consider limit and market order for now
-
-    Order* prev = nullptr;
-    Order* next = nullptr;
-
-    struct PriceLevel* price_level = nullptr;
-
-    uint64_t timestamp;
-};
 
 struct PriceLevel
 {
@@ -72,7 +54,7 @@ public:
     ~OrderBook();
 
     void processRequest(const OrderRequest* req);
-    void showL2(size_t depth = UINT32_MAX);
+    void showL2(size_t depth = 10);
 
     // Snapshot support
     struct SnapshotOrder {
@@ -113,7 +95,7 @@ private:
     std::map<size_t, PriceLevel*> active_levels_[2];// [B][A]
     
     PriceLevel* GetOrCreatePriceLevel(size_t price_index, Side side);
-    void removePriceLevel(PriceLevel* pl);
+    void removePriceLevel(PriceLevel* pl, Side side);
     void match(Order* incoming);
     void addToBook(Order* order);
 
@@ -122,7 +104,7 @@ private:
     void handleModifyOrder(const OrderRequest* req);
 
     // Linked list 操作
-    void insertOrderToLevel(PriceLevel* level, Order* order);
+    void insertOrderToLevel(PriceLevel* level, Order* order, Side side);
     void removeOrderFromLevel(Order* order);
 };
 }

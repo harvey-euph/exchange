@@ -20,6 +20,9 @@ int main() {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
+    // Use a small trick to clear screen initially
+    std::cout << "\033[2J\033[H" << std::flush;
+
     std::cout << "[OrderCore] Starting matching engine..." << std::endl;
 
     Exchange::ClientExecutionReporter reporter(ORDER_RESPONSE);
@@ -39,9 +42,9 @@ int main() {
         {
             if (data_ptr && data_size > 0) {
                 auto req = flatbuffers::GetRoot<Exchange::OrderRequest>(data_ptr);
-                std::cout << "[OrderCore] Dequeued Request: exec_id=" << req->exec_id() << std::endl;
+                // std::cout << "[OrderCore] Dequeued Request: exec_id=" << req->exec_id() << std::endl;
                 book.processRequest(req);
-                book.showL2();
+                // book.showL2();
             }
         }
         else 

@@ -12,6 +12,7 @@
 #include <vector>
 #include "ring/SHMRingBuffer.hpp"
 #include "fbs/order_generated.h"
+#include "LogUtil.hpp"
 #include "define.hpp"
 
 namespace beast = boost::beast;
@@ -47,7 +48,8 @@ net::awaitable<void> do_session(tcp::socket socket, Exchange::SHMRingBuffer& req
             if (req.method() == http::verb::post && req.target() == "/order" && req.body().size() >= 8) {
                 auto order_req = flatbuffers::GetRoot<Exchange::OrderRequest>(req.body().data());
                 uint64_t exec_id = order_req->exec_id();
-                std::cout << "[Accepter] Received Request exec_id=" << exec_id << " order_id=" << order_req->order_id() << std::endl;
+                
+                Exchange::logOrderRequest(order_req, "[Accepter] Received Request:");
 
                 if (request_ring.enqueue(req.body().data(), req.body().size())) {
                     std::cout << "[Accepter] Enqueued Request exec_id=" << exec_id << " size=" << req.body().size() << std::endl;

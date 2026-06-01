@@ -1,6 +1,9 @@
 #include "OrderBook.hpp"
 #include "define.hpp"
+#include "LogUtil.hpp"
 #include <iostream>
+#include <cstdio>
+#include <algorithm>
 
 using namespace Exchange;
 
@@ -62,46 +65,13 @@ Order* OrderBook::createOrder(const OrderRequest* req)
     };
 }
 
-void printOrder(const Order *o)
-{
-    if (!o) return;
-    std::cout << "[Order] "
-              << "id=" << o->order_id
-              << ", client=" << o->client_id
-              << ", exec_id=" << o->exec_id
-              << ", type=" << EnumNameOrderType(o->type)
-              << ", qty_orig=" << o->qty_original
-              << ", qty_rem=" << o->qty_remaining
-              << ", ts=" << o->timestamp
-              << (o->price_level ? " [InBook]" : " [Floating]")
-              << std::endl;
-}
-
-void printOrderRequest(const OrderRequest *req)
-{
-    if (!req) return;
-    std::cout << "[OrderRequest] "
-              << "action=" << EnumNameOrderAction(req->action())
-              << ", exec_id=" << req->exec_id()
-              << ", order_id=" << req->order_id()
-              << ", client=" << req->client_id()
-              << ", sym=" << req->symbol_id()
-              << ", side=" << EnumNameSide(req->side())
-              << ", type=" << EnumNameOrderType(req->type())
-              << ", price=" << req->p()
-              << ", qty=" << req->q()
-              << ", visible=" << req->visible_qty()
-              << ", ts=" << req->timestamp()
-              << std::endl;
-}
-
 void OrderBook::processRequest(const OrderRequest* req)
 {
     if (!req) {
         return;
     }
 
-    printOrderRequest(req);
+    logOrderRequest(req);
 
     switch (req->action()) {
     case OrderAction_Cancel:
@@ -151,14 +121,15 @@ void OrderBook::handleNewOrder(const OrderRequest* req, bool report_ack)
     while (*oppo && incoming->qty_remaining)
     {
         bool crossed = false;
+        const size_t oppo_idx = (*oppo) - price_array_.data();
 
         if (req->side() == Side_Buy)
         {
-            crossed = price_idx >= (size_t)((*oppo) - price_array_.data());
+            crossed = price_idx >= oppo_idx;
         }
         else
         {
-            crossed = price_idx <= (size_t)((*oppo) - price_array_.data());
+            crossed = price_idx <= oppo_idx;
         }
 
         if (!crossed)
@@ -181,34 +152,27 @@ void OrderBook::handleNewOrder(const OrderRequest* req, bool report_ack)
                 incoming,
                 existing,
                 req->side(),
-                index_to_price((*oppo) - price_array_.data()),
+                index_to_price(oppo_idx),
                 qty_fill);
 
             l3.update(
-                1, //symbol_id
+                symbol_id_,
                 existing->qty_remaining == 0 ? ExecType_Fill : ExecType_PartialFill,
                 existing->order_id,
                 (Exchange::Side)(1 - side_int),
-                index_to_price((*oppo) - price_array_.data()),
+                index_to_price(oppo_idx),
                 qty_fill
             );
 
             l3.update(
-                1, //symbol_id
+                symbol_id_,
                 incoming->qty_remaining == 0 ? ExecType_Fill : ExecType_PartialFill,
                 incoming->order_id,
                 (Exchange::Side)side_int,
-                index_to_price((*oppo) - price_array_.data()),
+                index_to_price(oppo_idx),
                 qty_fill
             );
             
-            l2.update(
-                1, //symbol_id
-                (Exchange::Side)(1 - side_int),
-                index_to_price((*oppo) - price_array_.data()), 
-                (*oppo)->total_qty
-            );
-
             if (!existing->qty_remaining)
             {
                 active_orders_.erase(existing->order_id);
@@ -218,11 +182,19 @@ void OrderBook::handleNewOrder(const OrderRequest* req, bool report_ack)
                 existing = next;
             }
         }
+        
+        // Update L2 once per price level fill
+        l2.update(
+            symbol_id_,
+            (Exchange::Side)(1 - side_int),
+            index_to_price(oppo_idx), 
+            (*oppo)->total_qty
+        );
+
         if (!(*oppo)->order_count)
         {
-            active_levels_[1 - side_int].erase(*oppo - price_array_.data());
-            (*oppo) = (*oppo)->worse;
-            if (*oppo) (*oppo)->better = nullptr;
+            removePriceLevel(*oppo, (Side)(1-side_int));
+            *oppo = best_levels_[1-side_int];
         }
     }
 
@@ -240,10 +212,10 @@ void OrderBook::handleNewOrder(const OrderRequest* req, bool report_ack)
     //
     PriceLevel* level = GetOrCreatePriceLevel(price_idx, req->side());
 
-    insertOrderToLevel(level, incoming);
+    insertOrderToLevel(level, incoming, req->side());
 
     l3.update(
-        1, //symbol_id
+        symbol_id_,
         ExecType_New,
         incoming->order_id,
         req->side(),
@@ -272,7 +244,7 @@ void OrderBook::handleCancelOrder(const OrderRequest* req, bool report_cancelled
     pl->total_qty -= o->qty_remaining;
 
     l3.update(
-        1, //symbol_id
+        symbol_id_,
         ExecType_Cancelled,
         o->order_id,
         req->side(),
@@ -281,14 +253,14 @@ void OrderBook::handleCancelOrder(const OrderRequest* req, bool report_cancelled
     );
 
     l2.update(
-        1, //symbol_id
+        symbol_id_,
         req->side(),
         index_to_price(pl - price_array_.data()), 
         pl->total_qty
     );
    
     if (!pl->order_count) 
-        removePriceLevel(pl);
+        removePriceLevel(pl, req->side());
     
     delete o;
     if (report_cancelled) {
@@ -328,7 +300,7 @@ void OrderBook::handleModifyOrder(const OrderRequest* req)
         pl->total_qty += qty_diff;
         
         l3.update(
-            1, //symbol_id
+            symbol_id_,
             ExecType_Replaced,
             o->order_id,
             req->side(),
@@ -337,7 +309,7 @@ void OrderBook::handleModifyOrder(const OrderRequest* req)
         );
 
         l2.update(
-            1, //symbol_id
+            symbol_id_,
             req->side(),
             index_to_price(pl - price_array_.data()), 
             pl->total_qty
@@ -354,53 +326,43 @@ void OrderBook::handleModifyOrder(const OrderRequest* req)
 
 void OrderBook::showL2(size_t depth)
 {
-    (void) depth;
+    // \033[H moves cursor to top-left (home)
+    std::cout << "\033[H";
+    printf("==================== Order Book ====================\n");
 
-    printf("\n====================================================\n");
-
-    for (auto [k, v] : active_levels_[1])
-    {
-        std::cout << k << ' ';
+    // Asks: High to Low (Closest to spread at bottom)
+    std::vector<std::pair<size_t, PriceLevel*>> asks;
+    for (auto const& pair : active_levels_[1]) {
+        asks.push_back(pair);
     }
-    std::cout << '\n';
-
-    for (size_t i = price_array_.size()-1; i < price_array_.size(); --i)
-    {
-        if (
-            price_array_[i].order_count || price_array_[i].total_qty || 
-            price_array_[i].dummy_head.next != &price_array_[i].dummy_tail ||
-            price_array_[i].dummy_tail.prev != &price_array_[i].dummy_head
-        )
-            //  || price_array_[i].better || price_array_[i].worse)
-        {
-            if (&price_array_[i] == best_levels_[1]) {
-                printf("[A1] ");
-            } else if (&price_array_[i] == best_levels_[0]) {
-                printf("------------------------------------------------------\n[B1] ");
-            } else {
-                printf("     ");
-            }
-            auto better = price_array_[i].better? price_array_[i].better : price_array_.data();
-            auto worse  = price_array_[i].worse?  price_array_[i].worse  : price_array_.data();
-            printf("[%6lu] qty= %6lu nr= %3lu better=[%6lu] worse=[%6lu]\n", 
-                i, 
-                price_array_[i].total_qty,
-                price_array_[i].order_count,
-                (uint64_t)(better - price_array_.data()),
-                (uint64_t)(worse - price_array_.data())
-            );
-        }
+    
+    size_t show_asks = std::min(asks.size(), depth);
+    for (int i = (int)show_asks - 1; i >= 0; --i) {
+        size_t idx = asks[i].first;
+        PriceLevel* pl = asks[i].second;
+        if (pl == best_levels_[1]) printf("[A1] "); else printf("     ");
+        printf("[%6lu] price=%10ld qty=%8lu nr=%3lu\n", 
+               idx, index_to_price(idx), pl->total_qty, pl->order_count);
     }
-    for (auto [k, v] : active_levels_[0])
-    {
-        std::cout << k << ' ';
-    }
-    std::cout << '\n';
 
-    printf("====================================================\n\n");
+    printf("----------------------------------------------------\n");
+
+    // Bids: High to Low (Closest to spread at top)
+    size_t count = 0;
+    for (auto it = active_levels_[0].rbegin(); it != active_levels_[0].rend() && count < depth; ++it, ++count) {
+        size_t idx = it->first;
+        PriceLevel* pl = it->second;
+        if (pl == best_levels_[0]) printf("[B1] "); else printf("     ");
+        printf("[%6lu] price=%10ld qty=%8lu nr=%3lu\n", 
+               idx, index_to_price(idx), pl->total_qty, pl->order_count);
+    }
+
+    printf("====================================================\n");
+    // Clear anything below the book in case depth decreased
+    std::cout << "\033[J" << std::flush;
 }
 
-void OrderBook::insertOrderToLevel(PriceLevel* pl, Order* order)
+void OrderBook::insertOrderToLevel(PriceLevel* pl, Order* order, Side side)
 {
     order->price_level = pl;
 
@@ -415,13 +377,9 @@ void OrderBook::insertOrderToLevel(PriceLevel* pl, Order* order)
     ++pl->order_count;
     pl->total_qty += order->qty_remaining;
     
-    int s = 1;
-    if (best_levels_[0] && pl <= best_levels_[0]) {
-        s = 0;
-    }
     l2.update(
-        1, //symbol_id
-        (Exchange::Side)s,
+        symbol_id_,
+        side,
         index_to_price(pl - price_array_.data()), 
         pl->total_qty
     );
@@ -434,36 +392,24 @@ void OrderBook::removeOrderFromLevel(Order *o)
     o->price_level->order_count -= 1;
 }
 
-void OrderBook::removePriceLevel(PriceLevel *pl)
+void OrderBook::removePriceLevel(PriceLevel *pl, Side side)
 {
     if (!pl) return;
 
     const size_t price_idx = pl - price_array_.data();
-
-    int side = -1;
-    for (int s = 0; s < 2; ++s) {
-        auto it = active_levels_[s].find(price_idx);
-        if (it != active_levels_[s].end() && it->second == pl) {
-            side = s;
-            break;
-        }
-    }
-
-    if (side == -1) {
-        return;
-    }
+    const int s = static_cast<int>(side);
 
     if (pl->better) {
         pl->better->worse = pl->worse;
     } else {
-        best_levels_[side] = pl->worse;
+        best_levels_[s] = pl->worse;
     }
 
     if (pl->worse) {
         pl->worse->better = pl->better;
     }
 
-    active_levels_[side].erase(price_idx);
+    active_levels_[s].erase(price_idx);
 }
 
 PriceLevel* OrderBook::GetOrCreatePriceLevel(size_t price_idx, Side side)
@@ -538,7 +484,6 @@ PriceLevel* OrderBook::GetOrCreatePriceLevel(size_t price_idx, Side side)
 std::vector<OrderBook::SnapshotOrder> OrderBook::getL3Snapshot() const
 {
     std::vector<SnapshotOrder> snapshot;
-    // Iterate through all active levels on both sides
     for (int side = 0; side < 2; ++side) {
         for (auto const& [price_idx, level] : active_levels_[side]) {
             Order* o = level->dummy_head.next;
@@ -555,4 +500,3 @@ std::vector<OrderBook::SnapshotOrder> OrderBook::getL3Snapshot() const
     }
     return snapshot;
 }
-

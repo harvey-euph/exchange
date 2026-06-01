@@ -2,6 +2,7 @@
 #include "fbs/order_generated.h"
 #include "WSAdaptor.hpp"
 #include "ClientDatabase.hpp"
+#include "LogUtil.hpp"
 #include <iostream>
 #include <vector>
 #include <memory>
@@ -10,6 +11,7 @@
 #include <thread>
 #include <map>
 #include <mutex>
+#include <algorithm>
 #include "define.hpp"
 
 std::atomic<bool> g_running{true};
@@ -37,15 +39,23 @@ public:
             
             std::lock_guard<std::mutex> sessions_guard(sessions_mutex_);
             if (is_subscribe) {
-                client_sessions_[client_id] = client;
-                std::cout << "[ClientManager] Client " << client_id << " connected. Sending pending responses..." << std::endl;
+                client_sessions_[client_id].push_back(client);
+                std::cout << "[ClientManager] Client " << client_id << " connected (sessions: " 
+                          << client_sessions_[client_id].size() << "). Sending pending responses..." << std::endl;
                 
                 auto pending = db_->popPendingResponses(client_id);
                 for (auto& resp : pending) {
                     client->send(resp.data.data(), resp.data.size());
                 }
             } else {
-                client_sessions_.erase(client_id);
+                auto it = client_sessions_.find(client_id);
+                if (it != client_sessions_.end()) {
+                    auto& sessions = it->second;
+                    sessions.erase(std::remove(sessions.begin(), sessions.end(), client), sessions.end());
+                    if (sessions.empty()) {
+                        client_sessions_.erase(it);
+                    }
+                }
                 std::cout << "[ClientManager] Client " << client_id << " disconnected." << std::endl;
             }
         };
@@ -82,6 +92,9 @@ public:
     void handle_execution_response(const OrderResponse* resp, const void* data, size_t size) {
         (void) data; (void) size;
         uint32_t client_id = resp->client_id();
+
+        logOrderResponse(resp, "[ClientManager] Execution Report:");
+
         auto lock = get_client_lock(client_id);
         std::lock_guard<std::mutex> client_guard(*lock);
 
@@ -104,8 +117,10 @@ public:
         
         std::lock_guard<std::mutex> sessions_guard(sessions_mutex_);
         auto it = client_sessions_.find(client_id);
-        if (it != client_sessions_.end()) {
-            it->second->send(fbb.GetBufferPointer(), fbb.GetSize());
+        if (it != client_sessions_.end() && !it->second.empty()) {
+            for (auto& session : it->second) {
+                session->send(fbb.GetBufferPointer(), fbb.GetSize());
+            }
         } else {
             std::cout << "[ClientManager] Client " << client_id << " offline. Storing pending response." << std::endl;
             db_->addPendingResponse(client_id, fbb.GetBufferPointer(), fbb.GetSize());
@@ -120,6 +135,8 @@ public:
         switch (type) {
             case ClientRequestData_OrderRequest: {
                 auto order_req = request->data_as_OrderRequest();
+                logOrderRequest(order_req, "[ClientManager] Received Order Request:");
+
                 flatbuffers::FlatBufferBuilder fbb(256);
                 auto or_offset = CreateOrderRequest(fbb, 
                     order_req->action(), order_req->exec_id(), order_req->order_id(), 
@@ -158,7 +175,7 @@ private:
     std::shared_ptr<WSAdaptor> ws_adaptor_;
     SHMRingBuffer* request_ring_;
     std::shared_ptr<ClientDatabase> db_;
-    std::map<uint32_t, WSClientPtr> client_sessions_;
+    std::map<uint32_t, std::vector<WSClientPtr>> client_sessions_;
     std::map<uint32_t, std::shared_ptr<std::mutex>> client_locks_;
     std::mutex sessions_mutex_;
 };
