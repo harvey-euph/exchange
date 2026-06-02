@@ -37,10 +37,17 @@ class WSSession : public WSClient, public std::enable_shared_from_this<WSSession
 
     WSAdaptor::SubscribeHandler sub_handler_;
     WSAdaptor::MessageHandler msg_handler_;
+    WSAdaptor::CloseHandler close_handler_;
     
 public:
-    explicit WSSession(tcp::socket&& socket, WSAdaptor::SubscribeHandler sub_handler, WSAdaptor::MessageHandler msg_handler) 
-        : ws_(std::move(socket)), sub_handler_(sub_handler), msg_handler_(msg_handler) 
+    explicit WSSession(tcp::socket&& socket, 
+                       WSAdaptor::SubscribeHandler sub_handler, 
+                       WSAdaptor::MessageHandler msg_handler,
+                       WSAdaptor::CloseHandler close_handler) 
+        : ws_(std::move(socket)), 
+          sub_handler_(sub_handler), 
+          msg_handler_(msg_handler),
+          close_handler_(close_handler)
     {
         try {
             auto ep = ws_.next_layer().socket().remote_endpoint();
@@ -51,6 +58,14 @@ public:
     }
 
     bool is_closed() const { return closed_; }
+
+    void on_close() {
+        if (!closed_.exchange(true)) {
+            if (close_handler_) {
+                close_handler_(shared_from_this());
+            }
+        }
+    }
 
     net::awaitable<void> start() {
         try {
@@ -64,7 +79,7 @@ public:
             net::co_spawn(ws_.get_executor(), read_loop(), net::detached);
         } catch (std::exception const& e) {
             std::cerr << "[WSSession] Handshake error for " << remote_info_ << ": " << e.what() << std::endl;
-            closed_ = true;
+            on_close();
         }
     }
 
@@ -97,7 +112,7 @@ public:
             }
         } catch (std::exception const& e) {
             std::cout << "[WSSession] Read loop ending for " << remote_info_ << " (" << e.what() << ")" << std::endl;
-            closed_ = true;
+            on_close();
         }
     }
 
@@ -164,6 +179,7 @@ class WSListener : public std::enable_shared_from_this<WSListener> {
     std::mutex session_mutex_;
     WSAdaptor::SubscribeHandler sub_handler_;
     WSAdaptor::MessageHandler msg_handler_;
+    WSAdaptor::CloseHandler close_handler_;
 
 public:
     WSListener(net::io_context& ioc, tcp::endpoint endpoint)
@@ -189,12 +205,16 @@ public:
         msg_handler_ = handler;
     }
 
+    void set_close_handler(WSAdaptor::CloseHandler handler) {
+        close_handler_ = handler;
+    }
+
     net::awaitable<void> run() {
         try {
             for (;;) {
                 tcp::socket socket = co_await acceptor_.async_accept(net::use_awaitable);
                 
-                auto session = std::make_shared<WSSession>(std::move(socket), sub_handler_, msg_handler_);
+                auto session = std::make_shared<WSSession>(std::move(socket), sub_handler_, msg_handler_, close_handler_);
                 std::cout << "[WSListener] Accepted new connection. Starting session..." << std::endl;
                 {
                     std::lock_guard<std::mutex> lock(session_mutex_);
@@ -271,6 +291,10 @@ void WSAdaptor::set_subscribe_handler(SubscribeHandler handler) {
 
 void WSAdaptor::set_message_handler(MessageHandler handler) {
     pimpl_->listener->set_message_handler(handler);
+}
+
+void WSAdaptor::set_close_handler(CloseHandler handler) {
+    pimpl_->listener->set_close_handler(handler);
 }
 
 void WSAdaptor::send(WSClientPtr client, const void* data, size_t size) {

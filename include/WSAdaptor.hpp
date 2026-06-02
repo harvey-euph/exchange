@@ -39,6 +39,9 @@ public:
     using MessageHandler = std::function<void(WSClientPtr client, const void* data, size_t size)>;
     void set_message_handler(MessageHandler handler);
 
+    using CloseHandler = std::function<void(WSClientPtr client)>;
+    void set_close_handler(CloseHandler handler);
+
     // Direct Sending (if app logic needs it)
     void send(WSClientPtr client, const void* data, size_t size);
     

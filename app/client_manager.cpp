@@ -76,9 +76,6 @@ public:
                         auto client_resp = CreateClientResponse(fbb, ClientResponseData_PositionResponse, pos_resp.Union());
                         fbb.Finish(client_resp);
                         client->send(fbb.GetBufferPointer(), fbb.GetSize());
-                        
-                        auto pos_resp_ptr = flatbuffers::GetRoot<ClientResponse>(fbb.GetBufferPointer())->data_as_PositionResponse();
-                        logPositionResponse(pos_resp_ptr, "[ClientManager] Resending Position:");
                     }
                 }
 
@@ -117,6 +114,33 @@ public:
         };
 
         ws_adaptor_->set_subscribe_handler(subscribe_handler);
+
+        auto close_handler = [this](WSClientPtr client) {
+            std::lock_guard<std::mutex> sessions_guard(sessions_mutex_);
+            for (auto it = client_sessions_.begin(); it != client_sessions_.end(); ) {
+                auto& sessions = it->second;
+                auto original_size = sessions.size();
+                sessions.erase(std::remove(sessions.begin(), sessions.end(), client), sessions.end());
+                
+                if (sessions.size() < original_size) {
+                    uint32_t client_id = it->first;
+                    std::cout << "[ClientManager] Session break detected for client " << client_id 
+                              << ". Treating as automatic logout." << std::endl;
+                    
+                    if (sessions.empty()) {
+                        it = client_sessions_.erase(it);
+                        continue; 
+                    }
+                }
+                ++it;
+            }
+            {
+                std::lock_guard<std::mutex> ready_guard(ready_mutex_);
+                ready_sessions_.erase(client);
+            }
+        };
+
+        ws_adaptor_->set_close_handler(close_handler);
 
         auto message_handler = [this](WSClientPtr client, const void* data, size_t size) {
             // Check session readiness
@@ -183,8 +207,6 @@ public:
                 auto client_resp = CreateClientResponse(fbb, ClientResponseData_OrderResponse, resp_offset.Union());
                 fbb.Finish(client_resp);
                 db_->addOrUpdateOpenOrder(client_id, resp->order_id(), fbb.GetBufferPointer(), fbb.GetSize());
-            } else {
-                db_->removeOpenOrder(client_id, resp->order_id());
             }
         } else if (resp->exec_type() == ExecType_Fill || resp->exec_type() == ExecType_Cancelled) {
             db_->removeOpenOrder(client_id, resp->order_id());
