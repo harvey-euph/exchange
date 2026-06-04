@@ -31,6 +31,7 @@ struct PriceLevel
 };
 
 class OrderBookTest;
+class MarketOrderTest;
 class CSVDataGen;
 
 class OrderBook
@@ -38,11 +39,16 @@ class OrderBook
     friend class CSVDataGen;
 
     friend class OrderBookTest;
+    friend class MarketOrderTest;
     FRIEND_TEST(OrderBookTest, InsertBidAsk);
     FRIEND_TEST(OrderBookTest, CancelAndModify);
     FRIEND_TEST(OrderBookTest, CancelFullLevelMaintainsPriceLinks);
     FRIEND_TEST(OrderBookTest, MatchSingleLayer);
     FRIEND_TEST(OrderBookTest, MatchingMultiLayer);
+    
+    FRIEND_TEST(MarketOrderTest, MarketBuyMatchesAllAsks);
+    FRIEND_TEST(MarketOrderTest, MarketSellMatchesAllBids);
+    FRIEND_TEST(MarketOrderTest, MarketOrderRestInBookAtExtremePrice);
     
 public:
     explicit OrderBook(uint64_t symbol_id,

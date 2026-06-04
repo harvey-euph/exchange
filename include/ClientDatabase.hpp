@@ -106,8 +106,8 @@ private:
         auto it = positions_.find(client_id);
         if (it == positions_.end()) {
             auto& client_pos = positions_[client_id];
-            client_pos[0] = 10000000; // 10M USD
-            client_pos[1] = 10000;    // 10K Symbol 1
+            client_pos[0] = 1000000; // 10M USD
+            client_pos[1] = 0;       //   0 Symbol 1
             return client_pos;
         }
         return it->second;

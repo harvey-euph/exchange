@@ -87,7 +87,7 @@ void OrderBook::processRequest(const OrderRequest* req)
         return;
 
     case OrderAction_New:
-        if (price_invalid(req->p())) {
+        if (req->type() != OrderType_Market && price_invalid(req->p())) {
             reporter_->onReject(req, RejectCode_PriceInvalid);
             return;
         }
@@ -108,13 +108,16 @@ void OrderBook::handleNewOrder(const OrderRequest* req, bool report_ack)
     }
 
     if (report_ack) {
-        reporter_->onAck(req, price_to_index(req->p()));
+        size_t ack_idx = (req->type() == OrderType_Market) ? 0 : price_to_index(req->p());
+        reporter_->onAck(req, ack_idx);
     }
 
     Order* incoming = createOrder(req);
 
     const int side_int = static_cast<int>(req->side());
-    const size_t price_idx = price_to_index(req->p());
+    const size_t price_idx = (req->type() == OrderType_Market)
+        ? (req->side() == Side_Buy ? max_price_levels_ - 1 : 0)
+        : price_to_index(req->p());
 
     PriceLevel **oppo = &best_levels_[1 - side_int];
 
