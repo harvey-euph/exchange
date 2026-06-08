@@ -8,7 +8,7 @@
 #define ORDER_RESPONSE "ORDER_RESPONSE"
 
 // Unified sleep duration in milliseconds for dev/test environment polling loops
-#define POLL_SLEEP_MS 1
+#define POLL_SLEEP_MS 100
 
 // Polling back-off strategy:
 // In PRODUCTION_MODE, busy-wait using CPU pause instruction (or yield on non-x86) to minimize latency.

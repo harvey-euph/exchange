@@ -1,0 +1,19 @@
+#!/bin/bash
+
+SESSION="exchange"
+
+echo "[kill_services] Stopping all exchange service processes..."
+pkill -f "build/service/"
+
+echo "[kill_services] Killing tmux session '$SESSION'..."
+tmux kill-session -t "$SESSION" 2>/dev/null || true
+
+echo "[kill_services] Cleaning up shared memory files..."
+rm -f /dev/shm/ORDER_REQUEST \
+      /dev/shm/ORDER_RESPONSE \
+      /dev/shm/L2_UPDATE_RING \
+      /dev/shm/L3_UPDATE_RING \
+      /dev/shm/EXCHANGE_TELEMETRY \
+      /dev/shm/*TELEMETRY 2>/dev/null || true
+
+echo "[kill_services] Done."

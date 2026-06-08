@@ -1,0 +1,64 @@
+#!/bin/bash
+
+PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
+BUILD_SERVICE_DIR="$PROJECT_ROOT/build/service"
+LOG_DIR="$PROJECT_ROOT/log"
+SESSION="exchange"
+
+mkdir -p "$LOG_DIR"
+
+# Check if session already exists
+if tmux list-sessions -F '#S' 2>/dev/null | grep -q -x "$SESSION"; then
+    echo "Session '$SESSION' is already running in the background."
+    exit 0
+fi
+
+# If binaries not found or not compiled, run make
+if [ ! -d "$BUILD_SERVICE_DIR" ] || [ -z "$(find "$BUILD_SERVICE_DIR" -maxdepth 1 -type f -executable 2>/dev/null)" ]; then
+    echo "Service binaries not found or not compiled. Running 'make'..."
+    make -C "$PROJECT_ROOT"
+    if [ $? -ne 0 ]; then
+        echo "Error: 'make' failed."
+        exit 1
+    fi
+fi
+
+# Find all executable services dynamically
+SERVICES=($(find "$BUILD_SERVICE_DIR" -maxdepth 1 -type f -executable | sort))
+
+if [ ${#SERVICES[@]} -eq 0 ]; then
+    echo "Error: No executable services found in $BUILD_SERVICE_DIR even after running make."
+    exit 1
+fi
+
+echo "Starting $SESSION services in the background (detached tmux session)..."
+
+# Start a new detached session with the first service
+first_exe="${SERVICES[0]}"
+first_name=$(basename "$first_exe")
+log="$LOG_DIR/${first_name}.log"
+
+tmux new-session -d -s "$SESSION" -n "$first_name" "bash -c 'while true; do echo \"--- Starting $first_name ---\"; $first_exe 2>&1 | tee -a $log; echo \"--- $first_name crashed, restarting in 2s ---\"; sleep 2; done'"
+
+# Configure status bar for help
+tmux set-option -t "$SESSION" status-bg black
+tmux set-option -t "$SESSION" status-fg white
+
+# Bind Ctrl+B + Arrows to switch windows easily
+tmux bind-key -r Left select-window -t :-
+tmux bind-key -r Right select-window -t :+
+
+# Create windows for the remaining services
+for ((i=1; i<${#SERVICES[@]}; i++)); do
+    exe="${SERVICES[$i]}"
+    name=$(basename "$exe")
+    log="$LOG_DIR/${name}.log"
+    
+    # Run the service in a loop for health check/auto-restart
+    tmux new-window -t "$SESSION" -n "$name" "bash -c 'while true; do echo \"--- Starting $name ---\"; $exe 2>&1 | tee -a $log; echo \"--- $name crashed, restarting in 2s ---\"; sleep 2; done'"
+done
+
+# Select the first window by default
+tmux select-window -t "$SESSION":0
+
+echo "Services successfully started. To view them, run: tmux attach -t $SESSION"

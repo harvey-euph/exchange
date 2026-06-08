@@ -6,6 +6,7 @@
 #include "define.hpp"
 #include "SignalHandler.hpp"
 #include "TimeUtil.hpp"
+#include "Telemetry.hpp"
 #include <limits>
 
 int main() {
@@ -17,6 +18,7 @@ int main() {
     std::cout << "[OrderCore] Starting matching engine..." << std::endl;
 
     Exchange::ClientExecutionReporter reporter(ORDER_RESPONSE);
+    Exchange::TelemetryProvider telemetry("EXCHANGE_TELEMETRY", false);
 
     Exchange::OrderBook book(1, 1, 2000, 8192, &reporter);
 
@@ -46,6 +48,10 @@ int main() {
                 uint64_t end = Exchange::read_tsc_end();
                 
                 uint64_t diff = end - start;
+                
+                // 記錄至共享記憶體指標中
+                telemetry.data()->core_count.fetch_add(1, std::memory_order_relaxed);
+                telemetry.data()->core_cycles_sum.fetch_add(diff, std::memory_order_relaxed);
                 
                 if (count >= warm_up) {
                     total_cycles += diff;

@@ -3,7 +3,10 @@
 #include "WSAdaptor.hpp"
 #include "ClientDatabase.hpp"
 #include "LogUtil.hpp"
+#include "TimeUtil.hpp"
+#include "Telemetry.hpp"
 #include <iostream>
+#include <unordered_map>
 #include <vector>
 #include <memory>
 #include <atomic>
@@ -23,6 +26,7 @@ public:
         , request_ring_(request_ring)
         , db_(db)
     {
+        telemetry_ = std::make_unique<TelemetryProvider>("EXCHANGE_TELEMETRY", false);
         std::cout << "[ClientManager] Initializing on port " << port << std::endl;
 
         auto subscribe_handler = [this](WSClientPtr client, uint32_t client_id, bool is_subscribe) {
@@ -170,8 +174,20 @@ public:
     }
 
     void handle_execution_response(const OrderResponse* resp, const void* data, size_t size) {
+        uint64_t handle_start = Exchange::read_tsc_begin();
         (void) data; (void) size;
         uint32_t client_id = resp->client_id();
+        uint64_t order_id = resp->order_id();
+
+        uint64_t start_time = 0;
+        {
+            std::lock_guard<std::mutex> lock(metrics_mutex_);
+            auto it = order_start_times_.find(order_id);
+            if (it != order_start_times_.end()) {
+                start_time = it->second;
+                order_start_times_.erase(it);
+            }
+        }
 
         logOrderResponse(resp, "[ClientManager] Execution Report:");
 
@@ -218,6 +234,17 @@ public:
             std::cout << "[ClientManager] Client " << client_id << " offline. Storing pending response." << std::endl;
             db_->addPendingResponse(client_id, fbb.GetBufferPointer(), fbb.GetSize());
         }
+
+        uint64_t handle_end = Exchange::read_tsc_end();
+        uint64_t handle_lat = handle_end - handle_start;
+        telemetry_->data()->mgmt_count.fetch_add(1, std::memory_order_relaxed);
+        telemetry_->data()->mgmt_cycles_sum.fetch_add(handle_lat, std::memory_order_relaxed);
+
+        if (start_time != 0) {
+            uint64_t total_lat = handle_end - start_time;
+            telemetry_->data()->e2e_count.fetch_add(1, std::memory_order_relaxed);
+            telemetry_->data()->e2e_cycles_sum.fetch_add(total_lat, std::memory_order_relaxed);
+        }
     }
 
     void process_client_request(WSClientPtr client, const void* data, size_t size) {
@@ -229,6 +256,12 @@ public:
             case ClientRequestData_OrderRequest: {
                 auto order_req = request->data_as_OrderRequest();
                 logOrderRequest(order_req, "[ClientManager] Received Order Request:");
+
+                uint64_t start_time = Exchange::read_tsc_begin();
+                {
+                    std::lock_guard<std::mutex> lock(metrics_mutex_);
+                    order_start_times_[order_req->order_id()] = start_time;
+                }
 
                 flatbuffers::FlatBufferBuilder fbb(256);
                 auto or_offset = CreateOrderRequest(fbb, 
@@ -273,6 +306,9 @@ private:
     std::set<WSClientPtr> ready_sessions_;
     std::mutex sessions_mutex_;
     std::mutex ready_mutex_;
+    std::unordered_map<uint64_t, uint64_t> order_start_times_;
+    std::mutex metrics_mutex_;
+    std::unique_ptr<TelemetryProvider> telemetry_;
 };
 
 } // namespace Exchange
