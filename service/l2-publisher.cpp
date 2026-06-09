@@ -19,13 +19,11 @@ int main()
     // Use a small trick to clear screen initially
     std::cout << "\033[2J\033[H" << std::flush;
 
-    size_t ring_size = 16384;
-
     std::cout << "[L2Publisher] Connecting to SHMRingBuffer: " << L2_UPDATE_RING << "..." << std::endl;
 
     Exchange::SHMRingBuffer* ring_buffer = nullptr;
     try {
-        ring_buffer = new Exchange::SHMRingBuffer(L2_UPDATE_RING, ring_size);
+        ring_buffer = new Exchange::SHMRingBuffer(L2_UPDATE_RING, L2_UPDATE_RING_SIZE);
     } catch (const std::exception& e) {
         std::cerr << "[L2Publisher] Failed to connect to SHMRingBuffer: " << e.what() << std::endl;
         return -1;

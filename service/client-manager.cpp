@@ -319,14 +319,13 @@ int main()
 {
     setup_signals();
 
-    size_t ring_size = 16384;
     auto db = std::make_shared<Exchange::InMemoryClientDatabase>();
 
     Exchange::SHMRingBuffer* response_ring = nullptr;
     Exchange::SHMRingBuffer* request_ring = nullptr;
     try {
-        response_ring = new Exchange::SHMRingBuffer(ORDER_RESPONSE, ring_size);
-        request_ring = new Exchange::SHMRingBuffer(ORDER_REQUEST, ring_size);
+        response_ring = new Exchange::SHMRingBuffer(ORDER_RESPONSE, ORDER_RESPONSE_SIZE);
+        request_ring = new Exchange::SHMRingBuffer(ORDER_REQUEST, ORDER_REQUEST_SIZE);
     } catch (const std::exception& e) {
         std::cerr << "[ClientManager] FATAL: " << e.what() << std::endl;
         return -1;

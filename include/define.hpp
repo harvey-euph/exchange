@@ -2,11 +2,16 @@
 #include <thread>
 #include <chrono>
 
-#define L2_UPDATE_RING "L2_UPDATE_RING"
-#define L3_UPDATE_RING "L3_UPDATE_RING"
 #define ORDER_REQUEST  "ORDER_REQUEST"
 #define ORDER_RESPONSE "ORDER_RESPONSE"
+#define L2_UPDATE_RING "L2_UPDATE_RING"
+#define L3_UPDATE_RING "L3_UPDATE_RING"
 #define EXCHANGE_TELEMETRY "EXCHANGE_TELEMETRY"
+
+#define ORDER_REQUEST_SIZE  65536
+#define ORDER_RESPONSE_SIZE 131072
+#define L2_UPDATE_RING_SIZE 65536
+#define L3_UPDATE_RING_SIZE 131072
 
 // Unified sleep duration in milliseconds for dev/test environment polling loops
 #define POLL_SLEEP_MS 1

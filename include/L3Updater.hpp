@@ -1,6 +1,7 @@
 #pragma once
 #include "fbs/order_generated.h"
 #include "ring/SHMRingBuffer.hpp"
+#include "define.hpp"
 #include <atomic>
 #include <string>
 
@@ -8,7 +9,7 @@ namespace Exchange {
 
 class L3Updater {
 public:
-    L3Updater(const std::string& ring_name, unsigned int ring_size = 16384);
+    L3Updater(const std::string& ring_name, unsigned int ring_size = L3_UPDATE_RING_SIZE);
     ~L3Updater();
 
     bool update(uint32_t symbol_id, ExecType exec_type, uint64_t order_id, Side side, int64_t price, uint64_t qty);

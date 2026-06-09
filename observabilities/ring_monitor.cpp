@@ -231,7 +231,7 @@ int main()
 
         std::cout << " Press [Ctrl+C] to exit.\n";
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
     std::cout << "[RingMonitor] Exiting..." << std::endl;

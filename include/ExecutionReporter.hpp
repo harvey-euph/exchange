@@ -6,6 +6,7 @@
 #include <flatbuffers/flatbuffers.h>
 #include "ring/SHMRingBuffer.hpp"
 #include "fbs/order_generated.h"
+#include "define.hpp"
 
 namespace Exchange {
 
@@ -46,7 +47,7 @@ public:
 class ClientExecutionReporter final : public ExecutionReporter
 {
 public:
-    ClientExecutionReporter(const std::string& ring_name = "ORDER_RESPONSE", unsigned int ring_size = 16384);
+    ClientExecutionReporter(const std::string& ring_name = ORDER_RESPONSE, unsigned int ring_size = ORDER_RESPONSE_SIZE);
     ~ClientExecutionReporter();
 
     void onRequest(const OrderRequest* req) override;

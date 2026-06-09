@@ -16,14 +16,13 @@
 int main() 
 {
     setup_signals();
-
-    size_t ring_size = 16384;
+    std::cout << "\033[2J\033[H" << std::flush;
 
     std::cout << "[L3Publisher] Connecting to SHMRingBuffer: " << L3_UPDATE_RING << "..." << std::endl;
 
     Exchange::SHMRingBuffer* ring_buffer = nullptr;
     try {
-        ring_buffer = new Exchange::SHMRingBuffer(L3_UPDATE_RING, ring_size);
+        ring_buffer = new Exchange::SHMRingBuffer(L3_UPDATE_RING, L3_UPDATE_RING_SIZE);
     } catch (const std::exception& e) {
         std::cerr << "[L3Publisher] Failed to connect to SHMRingBuffer: " << e.what() << std::endl;
         return -1;

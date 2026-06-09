@@ -97,7 +97,7 @@ net::awaitable<void> do_listen(tcp::endpoint endpoint, Exchange::SHMRingBuffer& 
 int main() {
     try {
         net::io_context ioc{1};
-        Exchange::SHMRingBuffer request_ring(ORDER_REQUEST, 16384);
+        Exchange::SHMRingBuffer request_ring(ORDER_REQUEST, ORDER_REQUEST_SIZE);
         
         net::co_spawn(ioc, do_listen({net::ip::make_address("0.0.0.0"), 8080}, request_ring), net::detached);
 

@@ -23,7 +23,7 @@ int main()
 
     Exchange::OrderBook book(1, 1, 2000, 8192, &reporter);
 
-    Exchange::SHMRingBuffer request_ring(ORDER_REQUEST, 16384);
+    Exchange::SHMRingBuffer request_ring(ORDER_REQUEST, ORDER_REQUEST_SIZE);
 
     void* data_ptr = nullptr;
     size_t data_size = 0;
