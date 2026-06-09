@@ -47,6 +47,8 @@ sequenceDiagram
     Note over CM: Mark session as ready
     CM->>Client: 4. Send Ready Frame (OrderResponse, ExecType=Complete)
     deactivate CM
+
+    Note over Client: CRITICAL: Client MUST receive Ready Frame (ExecType=Complete) before sending any OrderRequest!
 ```
 
 ### Ready Phase
@@ -72,6 +74,36 @@ graph TD
     
     RB_L3 -->|5. Dequeue| L3P[l3_publisher]
     L3P -->|6. WS L3Update| Client
+```
+
+### L2/L3 Update & Subscription Phase
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as Client API/APP
+    participant Pub as L2/L3 Publisher
+
+    Client->>Pub: Connect (WS Handshake)
+    activate Pub
+    
+    Note over Client, Pub: [TODO] Ability to request SNAPSHOT actively (without reconnecting)
+    
+    Client->>Pub: Subscribe / Request SNAPSHOT
+    
+    Pub->>Client: Send Empty Frame (Side = None)
+    Note over Client: MUST clear local L2/L3 data store upon receiving Empty Frame
+    
+    Note over Pub: [TODO] Send SNAPSHOT guarantees sequence:<br/>BEST BID -> BEST ASK -> OTHER LAYER
+    
+    loop Send SNAPSHOT
+        Pub->>Client: WS L2/L3 Update (Snapshot)
+    end
+    
+    loop Send INCREMENTALS
+        Pub->>Client: WS L2/L3 Update (Incremental)
+    end
+    deactivate Pub
 ```
 
 ## Data Flow and Client Protocol
