@@ -12,6 +12,68 @@ sudo apt install -y libgtest-dev libgmock-dev
 sudo apt install -y build-essential git libssl-dev zlib1g-dev libboost-all-dev
 ```
 
+## Message flow
+
+### Logon Phase
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as Client API/APP
+    participant CM as Client Manager
+    participant DB as Client Database
+
+    Client->>CM: Connect (WS Handshake)
+    activate CM
+    
+    CM->>DB: 1. Pop pending responses
+    DB-->>CM: Pending Executions list
+    loop Send pending executions
+        CM->>Client: WS ClientResponse (OrderResponse)
+    end
+    
+    CM->>DB: 2. Get current open orders
+    DB-->>CM: Open orders list
+    loop Send open orders
+        CM->>Client: WS ClientResponse (OrderResponse, ExecType=OrderStatus)
+    end
+
+    CM->>DB: 3. Get all positions (Cash & Assets)
+    DB-->>CM: Positions list
+    loop Send positions
+        CM->>Client: WS ClientResponse (PositionResponse)
+    end
+
+    Note over CM: Mark session as ready
+    CM->>Client: 4. Send Ready Frame (OrderResponse, ExecType=Complete)
+    deactivate CM
+```
+
+### Ready Phase
+
+```mermaid
+graph TD
+    Client[Client API/APP] -->|1. HTTP /order| HTTP[http_accepter]
+    Client -->|1. WS OrderRequest| CM[client_manager]
+    
+    HTTP -->|2. Enqueue| RB_REQ[ORDER_REQUEST SHM Ring Buffer]
+    CM -->|2. Enqueue| RB_REQ
+    
+    RB_REQ -->|3. Dequeue| OC[Matching Engine]
+    OC -->|4. ExecutionReport| RB_RESP[ORDER_RESPONSE SHM Ring Buffer]
+    OC -->|4. L2 Update| RB_L2[L2_UPDATE_RING SHM Ring Buffer]
+    OC -->|4. L3 Update| RB_L3[L3_UPDATE_RING SHM Ring Buffer]
+    
+    RB_RESP -->|5. Dequeue| CM
+    CM -->|6. WS ClientResponse / DB| Client
+    
+    RB_L2 -->|5. Dequeue| L2P[l2_publisher]
+    L2P -->|6. WS L2Update| Client
+    
+    RB_L3 -->|5. Dequeue| L3P[l3_publisher]
+    L3P -->|6. WS L3Update| Client
+```
+
 ## Data Flow and Client Protocol
 
     ---H> Send through HTTP Channel
