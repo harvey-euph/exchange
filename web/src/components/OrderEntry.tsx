@@ -24,14 +24,22 @@ interface OrderEntryProps {
   cash?: bigint;
   disabled?: boolean;
   priceExp?: number;
+  priceMinStep?: bigint;
 }
 
 export const OrderEntry: React.FC<OrderEntryProps> = ({
   isLoggedIn, clientId, setClientId, onLogin,
   price, quantity, side, peggedLevel, 
   setPrice, setQuantity, setSide, setPeggedLevel,
-  onSendOrder, cash, disabled, priceExp
+  onSendOrder, cash, disabled, priceExp, priceMinStep
 }) => {
+
+  // Convert raw mantissa step → display-unit step (e.g. step=25, exp=-2 → 0.25)
+  const priceDisplayStep = (() => {
+    if (priceMinStep === undefined || priceMinStep <= 0n) return 1;
+    if (priceExp === undefined || priceExp >= 0) return Number(priceMinStep);
+    return Number(priceMinStep) / Math.pow(10, -priceExp);
+  })();
 
   const handlePriceChange = (v: string) => {
     setPrice(v);
@@ -133,6 +141,7 @@ export const OrderEntry: React.FC<OrderEntryProps> = ({
           <NumericInput 
             value={peggedLevel !== null ? getPegDisplay() : price} 
             onChange={handlePriceChange} 
+            step={priceDisplayStep}
             style={{ 
               flex: 1, 
               height: '32px', 

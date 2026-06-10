@@ -22,16 +22,20 @@ export const NumericInput: React.FC<NumericInputProps> = ({
       if (allowDecimal) {
         const current = parseFloat(value || '0');
         const next = current + delta;
-        onChange(next >= 0 ? Number(next.toFixed(6)).toString() : '0');
+        // Derive decimal places from the step so e.g. step=0.25 → always 2 d.p.
+        const stepStr = step.toString();
+        const dotIdx = stepStr.indexOf('.');
+        const decimalPlaces = dotIdx >= 0 ? stepStr.length - dotIdx - 1 : 0;
+        onChange(next >= 0 ? next.toFixed(decimalPlaces) : (0).toFixed(decimalPlaces));
       } else {
         const current = BigInt(value || '0');
-        const next = current + BigInt(delta);
+        const next = current + BigInt(Math.round(delta));
         onChange(next >= 0n ? next.toString() : '0');
       }
     } catch (e) {
       onChange('0');
     }
-  }, [value, onChange, disabled, allowDecimal]);
+  }, [value, onChange, disabled, allowDecimal, step]);
 
   const handleInternalKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (disabled) return;

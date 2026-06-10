@@ -63,9 +63,21 @@ public:
         if (!book_.bids.empty()) price = book_.bids.begin()->first;
         else if (!book_.asks.empty()) price = book_.asks.begin()->first;
 
-        // Bracket parameters for NoiseTrader (wider than Insider to allow more noise)
-        double take_profit_ticks = 10.0;
-        double stop_loss_ticks = 8.0;
+        // Startup/reconnect fallback for entry_price_ if starting with active position
+        if (pos != 0 && entry_price_ == 0.0) {
+            if (price > 0.0) {
+                entry_price_ = price;
+            } else {
+                return; // Do not quote until we have a valid market price to use as base
+            }
+        }
+
+        auto it = symbols_info_.find(target_symbol_);
+        int64_t step = (it != symbols_info_.end()) ? it->second->price_min_step : 1;
+
+        // Bracket parameters for NoiseTrader (wider than Insider to allow more noise) scaled by step size
+        double take_profit_ticks = 10.0 * step;
+        double stop_loss_ticks = 8.0 * step;
 
         if (pos == 0) {
             closing_ = false;
@@ -93,7 +105,10 @@ public:
             }
         } else if (pos > 0) {
             if (pending_sell_qty == 0 && !closing_) {
-                int64_t tp_price = static_cast<int64_t>(std::round(entry_price_ + take_profit_ticks));
+                int64_t tp_price = static_cast<int64_t>(std::round((entry_price_ + take_profit_ticks) / step)) * step;
+                if (it != symbols_info_.end()) {
+                    tp_price = std::max(it->second->price_min, std::min(it->second->price_max, tp_price));
+                }
                 new_limit_order(target_symbol_, Side_Sell, tp_price, pos);
                 display_.add_message("Noise TP (SELL) @ " + std::to_string(tp_price));
             }
@@ -105,7 +120,10 @@ public:
             }
         } else if (pos < 0) {
             if (pending_buy_qty == 0 && !closing_) {
-                int64_t tp_price = static_cast<int64_t>(std::round(entry_price_ - take_profit_ticks));
+                int64_t tp_price = static_cast<int64_t>(std::round((entry_price_ - take_profit_ticks) / step)) * step;
+                if (it != symbols_info_.end()) {
+                    tp_price = std::max(it->second->price_min, std::min(it->second->price_max, tp_price));
+                }
                 new_limit_order(target_symbol_, Side_Buy, tp_price, std::abs(pos));
                 display_.add_message("Noise TP (BUY) @ " + std::to_string(tp_price));
             }

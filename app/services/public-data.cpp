@@ -16,27 +16,14 @@
 #include "define.hpp"
 #include "ThreadUtil.hpp"
 #include "AffinityConfig.hpp"
+#include "DbUtil.hpp"
 
 namespace beast = boost::beast;
 namespace http = beast::http;
 namespace net = boost::asio;
 using tcp = boost::asio::ip::tcp;
 
-struct SymbolData {
-    uint32_t symbol_id;
-    std::string name;
-    int32_t price_exp;
-    int64_t price_min_step;
-    int64_t price_min;
-    int64_t price_max;
-};
 
-// In-memory database of symbols
-const std::unordered_map<uint32_t, SymbolData> symbol_db = {
-    {1, {1, "BTC", -2, 25, 3000000, 12000000}}, // BTC-USD: step=0.25, min=30000.00, max=120000.00
-    {2, {2, "ETH", -2, 10, 150000, 600000}},    // ETH-USD: step=0.10, min=1500.00, max=6000.00
-    {3, {3, "SOL", -3, 5, 5000, 500000}}        // SOL-USD: step=0.005, min=5.000, max=500.000
-};
 
 net::awaitable<void> do_session(tcp::socket socket) {
     beast::tcp_stream stream(std::move(socket));
@@ -70,18 +57,28 @@ net::awaitable<void> do_session(tcp::socket socket) {
                     std::string id_str = target.substr(prefix.length());
                     try {
                         uint32_t symbol_id = std::stoul(id_str);
-                        auto it = symbol_db.find(symbol_id);
-                        if (it != symbol_db.end()) {
-                            const auto& sym = it->second;
+                        auto conn = Exchange::DbUtil::getDbConnection();
+                        pqxx::work w(*conn);
+                        pqxx::result r = w.exec_params(
+                            "SELECT name, p_exp, min_step_raw, min_price_raw, max_price_raw FROM symbols WHERE symbol_id = $1",
+                            symbol_id
+                        );
+                        if (!r.empty()) {
+                            auto name = r[0][0].as<std::string>();
+                            auto price_exp = r[0][1].as<int32_t>();
+                            auto min_step = r[0][2].as<int64_t>();
+                            auto min_price = r[0][3].as<int64_t>();
+                            auto max_price = r[0][4].as<int64_t>();
+
                             flatbuffers::FlatBufferBuilder builder(256);
-                            auto name_offset = builder.CreateString(sym.name);
+                            auto name_offset = builder.CreateString(name);
                             Exchange::SymbolInfoBuilder symbol_builder(builder);
-                            symbol_builder.add_symbol_id(sym.symbol_id);
+                            symbol_builder.add_symbol_id(symbol_id);
                             symbol_builder.add_name(name_offset);
-                            symbol_builder.add_price_exp(sym.price_exp);
-                            symbol_builder.add_price_min_step(sym.price_min_step);
-                            symbol_builder.add_price_min(sym.price_min);
-                            symbol_builder.add_price_max(sym.price_max);
+                            symbol_builder.add_price_exp(price_exp);
+                            symbol_builder.add_price_min_step(min_step);
+                            symbol_builder.add_price_min(min_price);
+                            symbol_builder.add_price_max(max_price);
                             auto symbol_offset = symbol_builder.Finish();
                             builder.Finish(symbol_offset);
 

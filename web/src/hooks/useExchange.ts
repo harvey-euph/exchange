@@ -30,6 +30,20 @@ function hashClientId(id: string): number {
   return (hash >>> 0); // Convert to unsigned 32-bit integer
 }
 
+function validatePrice(pVal: bigint, symbolInfo: SymbolInfoData | null): string | null {
+  if (!symbolInfo) return null;
+  const priceMin = BigInt(symbolInfo.priceMin);
+  const priceMax = BigInt(symbolInfo.priceMax);
+  const priceMinStep = BigInt(symbolInfo.priceMinStep);
+  if (pVal < priceMin || pVal > priceMax) {
+    return `Price ${pVal} is out of bounds [${priceMin}, ${priceMax}]`;
+  }
+  if (priceMinStep > 0n && pVal % priceMinStep !== 0n) {
+    return `Price ${pVal} is not a multiple of step size ${priceMinStep}`;
+  }
+  return null;
+}
+
 const REJECT_MESSAGES: Record<number, string> = {
   [RejectCode.PriceInvalid]: 'Invalid Price',
   [RejectCode.OrderNotFound]: 'Order Not Found',
@@ -164,6 +178,14 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
     const sId = resp.symbolId();
     const side = resp.side();
     const rejectCode = resp.rejectCode();
+
+    if (execType !== ExecType.Complete && execType !== ExecType.OrderStatus && symbolInfo && sId === activeSymbolId) {
+      const valErr = validatePrice(p, symbolInfo);
+      if (valErr) {
+        addMgmtLog(`[Error] Received invalid OrderResponse price: ${valErr}`);
+        onNotification?.('rejected', 'Response Price Invalid', valErr);
+      }
+    }
 
     if (execType === ExecType.Complete) {
       setConnected(prev => ({ ...prev, mgmtReady: true }));
@@ -485,6 +507,14 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
         const q = l2Update.q();
         const sId = l2Update.symbolId();
 
+        if (side !== Side.None && symbolInfo && sId === activeSymbolId) {
+          const valErr = validatePrice(p, symbolInfo);
+          if (valErr) {
+            addMgmtLog(`[Error] Received invalid L2 price: ${valErr}`);
+            onNotification?.('rejected', 'L2 Price Invalid', valErr);
+          }
+        }
+
         if (side === Side.None) { 
           if (sId === activeSymbolId) {
             setBids(new Map());
@@ -608,6 +638,14 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
     OrderRequest.addType(builder, type);
     
     const pVal = parsePrice(price, symbolInfo?.priceExp);
+    if (type !== OrderType.Market) {
+      const valErr = validatePrice(pVal, symbolInfo);
+      if (valErr) {
+        addMgmtLog(`[Error] Order rejected locally: ${valErr}`);
+        onNotification?.('rejected', 'Invalid Price', valErr);
+        return;
+      }
+    }
     OrderRequest.addP(builder, pVal);
     
     OrderRequest.addQ(builder, qVal);
@@ -662,6 +700,12 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
     OrderRequest.addSide(builder, order.side);
     
     const pVal = parsePrice(newPrice, symbolInfo?.priceExp);
+    const valErr = validatePrice(pVal, symbolInfo);
+    if (valErr) {
+      addMgmtLog(`[Error] Modify rejected locally: ${valErr}`);
+      onNotification?.('rejected', 'Invalid Price', valErr);
+      return;
+    }
     OrderRequest.addP(builder, pVal);
     
     OrderRequest.addQ(builder, BigInt(newQty));

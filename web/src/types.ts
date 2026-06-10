@@ -49,12 +49,22 @@ export function formatPrice(price: bigint, priceExp: number | undefined): string
   const factor = BigInt(10 ** expLength);
   const isNegative = price < 0n;
   const absPrice = isNegative ? -price : price;
-  
+
   const integerPart = absPrice / factor;
   const fractionalPart = absPrice % factor;
+  // Always pad to full expLength so e.g. 80000 → "80000.00"
   const fracStr = fractionalPart.toString().padStart(expLength, '0');
-  
+
   return `${isNegative ? '-' : ''}${integerPart}.${fracStr}`;
+}
+
+/**
+ * Returns the number of decimal places implied by a priceExp value.
+ * e.g. priceExp=-2 → 2,  priceExp=0 → 0
+ */
+export function priceDecimalPlaces(priceExp: number | undefined): number {
+  if (priceExp === undefined || priceExp >= 0) return 0;
+  return -priceExp;
 }
 
 export function parsePrice(priceStr: string, priceExp: number | undefined): bigint {

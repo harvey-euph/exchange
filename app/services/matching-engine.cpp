@@ -1,4 +1,5 @@
 #include "MatchingEngine.hpp"
+#include "DbUtil.hpp"
 #include "ExecutionReporter.hpp"
 #include "ThreadUtil.hpp"
 #include "AffinityConfig.hpp"
@@ -17,9 +18,36 @@ int main()
 
     std::cout << "[OrderCore] Starting matching engine..." << std::endl;
 
-    Exchange::ClientExecutionReporter reporter(ORDER_RESPONSE);
+    // Query DB for symbol 1 parameters
+    int64_t min_step = 1;
+    int64_t price_offset = 2000;
+    size_t max_price_levels = 8192;
+    try {
+        auto conn = Exchange::DbUtil::getDbConnection();
+        pqxx::work w(*conn);
+        pqxx::result r = w.exec_params(
+            "SELECT min_step_raw, min_price_raw, max_price_raw FROM symbols WHERE symbol_id = 1"
+        );
+        if (!r.empty()) {
+            int64_t min_step_raw = r[0][0].as<int64_t>();
+            int64_t min_price_raw = r[0][1].as<int64_t>();
+            int64_t max_price_raw = r[0][2].as<int64_t>();
+            
+            min_step = min_step_raw;
+            price_offset = min_price_raw / min_step_raw;
+            max_price_levels = (max_price_raw - min_price_raw) / min_step_raw + 1;
+            std::cout << "[OrderCore] Loaded Symbol 1 config from DB: min_step=" << min_step 
+                      << ", price_offset=" << price_offset << ", max_price_levels=" << max_price_levels << std::endl;
+        } else {
+            std::cerr << "[OrderCore] WARNING: Symbol 1 not found in DB, using default parameters" << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[OrderCore] ERROR querying DB: " << e.what() << ", using default parameters" << std::endl;
+    }
 
-    Exchange::OrderBook book(1, 1, 2000, 8192, &reporter);
+    Exchange::SHMRingBuffer response_ring(ORDER_RESPONSE, ORDER_RESPONSE_SIZE);
+    Exchange::ClientExecutionReporter reporter(&response_ring);
+    Exchange::OrderBook book(1, min_step, price_offset, max_price_levels, &reporter);
 
     Exchange::SHMRingBuffer request_ring(ORDER_REQUEST, ORDER_REQUEST_SIZE);
 

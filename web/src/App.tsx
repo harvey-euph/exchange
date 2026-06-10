@@ -100,22 +100,21 @@ function App() {
 
     let finalPrice = price;
     if (peggedLevel !== null) {
-      // Resolve pegged price at the moment of send
+      // Resolve pegged price at the moment of send.
+      // sortedBids/sortedAsks carry raw mantissa bigints — use formatPrice so
+      // parsePrice inside sendOrder applies priceExp exactly once.
       if (orderSide === Side.Buy) {
-        // sortedBids is [Best(1) ... Worst(5)]
         const target = sortedBids[peggedLevel - 1]?.price;
         if (target !== undefined) {
-          finalPrice = target.toString();
+          finalPrice = formatPrice(target, symbolInfo?.priceExp);
         } else {
           handleNotification('rejected', 'Error', `No level BID ${peggedLevel} to peg to`);
           return;
         }
       } else {
-        // sortedAsks is [Worst(5) ... Best(1)]
-        // Best ASK(1) is the last element
         const target = sortedAsks[sortedAsks.length - peggedLevel]?.price;
         if (target !== undefined) {
-          finalPrice = target.toString();
+          finalPrice = formatPrice(target, symbolInfo?.priceExp);
         } else {
           handleNotification('rejected', 'Error', `No level ASK ${peggedLevel} to peg to`);
           return;
@@ -263,6 +262,7 @@ function App() {
                       noWrapper
                       expandedSymbols={expandedSymbols}
                       onToggleSymbol={toggleSymbol}
+                      symbolInfo={symbolInfo}
                     />
                   ) : (
                     <Positions 
@@ -290,6 +290,7 @@ function App() {
                 cash={cash}
                 disabled={!connected.mgmtReady}
                 priceExp={symbolInfo?.priceExp}
+                priceMinStep={symbolInfo?.priceMinStep}
               />
               <EmbeddedLog logs={mgmtLogs} onClear={clearMgmtLogs} />
             </div>

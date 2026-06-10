@@ -9,6 +9,7 @@
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
+#include <unordered_map>
 
 namespace Exchange {
 
@@ -70,6 +71,9 @@ protected:
     std::atomic<bool> ready_{false};
     std::mutex ready_mtx_;
     std::condition_variable ready_cv_;
+
+    bool validate_price(uint32_t symbol_id, int64_t p, std::string& err_msg);
+    std::unordered_map<uint32_t, std::unique_ptr<SymbolInfoT>> symbols_info_;
 
     ClientAccount account_;
 };

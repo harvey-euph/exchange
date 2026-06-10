@@ -6,6 +6,7 @@
 #include <iostream>
 #include <chrono>
 #include <thread>
+#include "PublicDataClient.hpp"
 
 namespace beast = boost::beast;
 namespace http = beast::http;
@@ -65,6 +66,20 @@ void AlgoTradingClient::cancel_order(uint64_t order_id, uint32_t symbol_id, Side
 }
 
 void AlgoTradingClient::send_order_request(OrderRequestT& order) {
+    if (order.action == OrderAction_New && order.type != OrderType_Market) {
+        std::string err;
+        if (!validate_price(order.symbol_id, order.p, err)) {
+            std::cerr << "[AlgoTradingClient] ERROR: Trying to send order with invalid price: " << err << std::endl;
+            throw std::runtime_error("Invalid order price: " + err);
+        }
+    } else if (order.action == OrderAction_Modify) {
+        std::string err;
+        if (!validate_price(order.symbol_id, order.p, err)) {
+            std::cerr << "[AlgoTradingClient] ERROR: Trying to modify order with invalid price: " << err << std::endl;
+            throw std::runtime_error("Invalid order price: " + err);
+        }
+    }
+
     order.client_id = config_.client_id;
     if (order.action == OrderAction_New) {
         order.order_id = next_id_++;
@@ -126,7 +141,37 @@ void AlgoTradingClient::query_position(uint32_t symbol_id) {
     mgmt_client_->send(fbb.GetBufferPointer(), fbb.GetSize());
 }
 
+bool AlgoTradingClient::validate_price(uint32_t symbol_id, int64_t p, std::string& err_msg) {
+    auto it = symbols_info_.find(symbol_id);
+    if (it == symbols_info_.end()) {
+        err_msg = "Symbol " + std::to_string(symbol_id) + " info not found";
+        return false;
+    }
+    const auto& info = it->second;
+    if (p < info->price_min || p > info->price_max) {
+        err_msg = "Price " + std::to_string(p) + " out of bounds [" +
+                  std::to_string(info->price_min) + ", " + std::to_string(info->price_max) + "]";
+        return false;
+    }
+    if (info->price_min_step > 0 && p % info->price_min_step != 0) {
+        err_msg = "Price " + std::to_string(p) + " is not a multiple of step size " +
+                  std::to_string(info->price_min_step);
+        return false;
+    }
+    return true;
+}
+
 void AlgoTradingClient::on_order_response(const OrderResponse* response) {
+    auto exec = response->exec_type();
+    if ((exec == ExecType_New || exec == ExecType_Fill || 
+         exec == ExecType_PartialFill || exec == ExecType_Replaced || exec == ExecType_OrderStatus) && 
+        response->reject_code() == RejectCode_None) {
+        std::string err;
+        if (!validate_price(response->symbol_id(), response->p(), err)) {
+            std::cerr << "[AlgoTradingClient] ERROR: OrderResponse has invalid price: " << err << std::endl;
+            throw std::runtime_error("OrderResponse has invalid price: " + err);
+        }
+    }
     account_.handle_order_response(response);
 }
 
@@ -140,6 +185,18 @@ void AlgoTradingClient::wait_until_ready() {
 }
 
 int AlgoTradingClient::run() {
+    // Fetch symbol info from public-data service
+    for (auto symbol_id : config_.symbol_ids) {
+        try {
+            auto info = PublicDataClient::getSymbolInfo(config_.host, "8081", symbol_id);
+            if (info) {
+                symbols_info_[symbol_id] = std::move(info);
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "[AlgoTradingClient] Warning: Failed to fetch symbol info for " << symbol_id << ": " << e.what() << std::endl;
+        }
+    }
+
     if (!mgmt_client_->connect()) {
         std::cerr << "Failed to connect to Management port " << config_.mgmt_port << std::endl;
         return 1;
@@ -175,12 +232,22 @@ int AlgoTradingClient::run() {
     l2_client_->run_async([this](const void* data, size_t size) {
         (void)size;
         auto update = flatbuffers::GetRoot<L2Update>(data);
+        std::string err;
+        if (update->side() != Side_None && update->p() != 0 && !validate_price(update->symbol_id(), update->p(), err)) {
+            std::cerr << "[AlgoTradingClient] ERROR: L2 Update has invalid price: " << err << std::endl;
+            throw std::runtime_error("L2 Update has invalid price: " + err);
+        }
         on_l2_update(update);
     });
 
     l3_client_->run_async([this](const void* data, size_t size) {
         (void)size;
         auto update = flatbuffers::GetRoot<L3Update>(data);
+        std::string err;
+        if (update->side() != Side_None && update->p() != 0 && !validate_price(update->symbol_id(), update->p(), err)) {
+            std::cerr << "[AlgoTradingClient] ERROR: L3 Update has invalid price: " << err << std::endl;
+            throw std::runtime_error("L3 Update has invalid price: " + err);
+        }
         on_l3_update(update);
     });
 

@@ -5,6 +5,11 @@
 #include <cstdint>
 #include <mutex>
 #include <memory>
+#include "fbs/exchange_generated.h"
+
+namespace pqxx {
+class connection;
+}
 
 namespace Exchange {
 
@@ -117,6 +122,30 @@ private:
     std::map<uint32_t, std::vector<PendingResponse>> pending_responses_;
     std::map<uint32_t, std::map<uint32_t, int64_t>> positions_;
     std::map<uint32_t, std::map<uint64_t, std::vector<uint8_t>>> open_orders_;
+};
+
+class PostgresClientDatabase : public ClientDatabase {
+public:
+    PostgresClientDatabase(const std::string& conn_str);
+    ~PostgresClientDatabase() override;
+
+    void addPendingResponse(uint32_t client_id, const uint8_t* data, size_t size) override;
+    std::vector<PendingResponse> popPendingResponses(uint32_t client_id) override;
+
+    int64_t getPosition(uint32_t client_id, uint32_t symbol_id) override;
+    std::map<uint32_t, int64_t> getAllPositions(uint32_t client_id) override;
+    void updatePosition(uint32_t client_id, uint32_t symbol_id, int64_t delta) override;
+
+    void addOrUpdateOpenOrder(uint32_t client_id, uint64_t order_id, const uint8_t* data, size_t size) override;
+    void removeOpenOrder(uint32_t client_id, uint64_t order_id) override;
+    std::vector<std::vector<uint8_t>> getOpenOrders(uint32_t client_id) override;
+
+private:
+    void reconnect_if_needed();
+
+    std::string conn_str_;
+    std::unique_ptr<pqxx::connection> conn_;
+    std::mutex mutex_;
 };
 
 } // namespace Exchange

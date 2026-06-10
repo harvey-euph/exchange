@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Side } from '../fbs/exchange/side';
-import type { OrderData } from '../types';
+import type { OrderData, SymbolInfoData } from '../types';
 import { NumericInput } from './NumericInput';
 import { formatPrice, getPriceExpForSymbol } from '../types';
 
@@ -12,11 +12,12 @@ interface OpenOrdersProps {
   noWrapper?: boolean;
   expandedSymbols: Set<number>;
   onToggleSymbol: (sid: number) => void;
+  symbolInfo?: SymbolInfoData | null;
 }
 
 export const OpenOrders: React.FC<OpenOrdersProps> = ({
   orders, onModify, onCancel, currentSymbolId, noWrapper,
-  expandedSymbols, onToggleSymbol
+  expandedSymbols, onToggleSymbol, symbolInfo
 }) => {
   const [editValues, setEditValues] = useState<Record<string, { p: string, q: string }>>({});
   const lastOrdersRef = React.useRef<Map<string, { p: string, q: string }>>(new Map());
@@ -35,13 +36,19 @@ export const OpenOrders: React.FC<OpenOrdersProps> = ({
     return Object.keys(ordersBySymbol).map(Number).sort((a, b) => a - b);
   }, [ordersBySymbol]);
 
+  // Helper: prefer live symbolInfo's priceExp over the hardcoded map
+  const getExp = (sid: number): number => {
+    if (symbolInfo && symbolInfo.symbolId === sid) return symbolInfo.priceExp;
+    return getPriceExpForSymbol(sid);
+  };
+
   // Initialize or update edit values when orders change
   useEffect(() => {
     setEditValues(prev => {
       const next = { ...prev };
       orders.forEach(o => {
         const orderId = o.orderId;
-        const exp = getPriceExpForSymbol(o.symbolId);
+        const exp = getExp(o.symbolId);
         const pStr = formatPrice(o.p, exp);
         const qStr = o.q.toString();
         const last = lastOrdersRef.current.get(orderId);
@@ -62,7 +69,7 @@ export const OpenOrders: React.FC<OpenOrdersProps> = ({
 
       return next;
     });
-  }, [orders]);
+  }, [orders, symbolInfo]);
 
   const handleUpdate = (orderId: string, field: 'p' | 'q', val: string) => {
     setEditValues(prev => ({
@@ -85,12 +92,22 @@ export const OpenOrders: React.FC<OpenOrdersProps> = ({
     }
   };
 
+
   const handleRevert = (orderId: string, order: OrderData) => {
-    const exp = getPriceExpForSymbol(order.symbolId);
+    const exp = getExp(order.symbolId);
     setEditValues(prev => ({
       ...prev,
       [orderId]: { p: formatPrice(order.p, exp), q: order.q.toString() }
     }));
+  };
+
+  // Cancel all orders for a symbol, optionally filtered by side
+  const handleCancelSymbol = (e: React.MouseEvent, sid: number, side?: Side) => {
+    e.stopPropagation(); // don't toggle expand/collapse
+    const targets = ordersBySymbol[sid] ?? [];
+    targets
+      .filter(o => side === undefined || o.side === side)
+      .forEach(o => onCancel(o));
   };
 
   const content = (
@@ -117,14 +134,60 @@ export const OpenOrders: React.FC<OpenOrdersProps> = ({
                 <React.Fragment key={sid}>
                   <tr className="symbol-group-header" onClick={() => onToggleSymbol(sid)}>
                     <td colSpan={6}>
-                      <div className="symbol-group-title">
-                        <span className={`expand-icon ${expandedSymbols.has(sid) ? 'expanded' : ''}`}>▼</span>
-                        Symbol {sid} ({ordersBySymbol[sid].length})
+                      <div className="symbol-group-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span className={`expand-icon ${expandedSymbols.has(sid) ? 'expanded' : ''}`}>▼</span>
+                          <span>Symbol {sid}</span>
+                          <span style={{ color: 'var(--text-secondary)', fontSize: '10px' }}>
+                            ({ordersBySymbol[sid].length})
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', gap: '4px' }} onClick={e => e.stopPropagation()}>
+                          <button
+                            className="modern-button"
+                            title="Cancel all Buy orders"
+                            onClick={e => handleCancelSymbol(e, sid, Side.Buy)}
+                            style={{
+                              padding: '3px 10px', fontSize: '11px', height: '24px',
+                              background: 'rgba(52,211,153,0.15)',
+                              color: 'var(--accent-green)',
+                              border: '1px solid rgba(52,211,153,0.35)',
+                            }}
+                          >
+                            ✕ Buy
+                          </button>
+                          <button
+                            className="modern-button"
+                            title="Cancel all Sell orders"
+                            onClick={e => handleCancelSymbol(e, sid, Side.Sell)}
+                            style={{
+                              padding: '3px 10px', fontSize: '11px', height: '24px',
+                              background: 'rgba(248,113,113,0.15)',
+                              color: 'var(--accent-red)',
+                              border: '1px solid rgba(248,113,113,0.35)',
+                            }}
+                          >
+                            ✕ Sell
+                          </button>
+                          <button
+                            className="modern-button"
+                            title="Cancel all orders"
+                            onClick={e => handleCancelSymbol(e, sid)}
+                            style={{
+                              padding: '3px 10px', fontSize: '11px', height: '24px',
+                              background: 'rgba(251,191,36,0.15)',
+                              color: '#fbbf24',
+                              border: '1px solid rgba(251,191,36,0.35)',
+                            }}
+                          >
+                            ✕ All
+                          </button>
+                        </div>
                       </div>
                     </td>
                   </tr>
                   {expandedSymbols.has(sid) && ordersBySymbol[sid].map((o, index) => {
-                    const exp = getPriceExpForSymbol(o.symbolId);
+                    const exp = getExp(o.symbolId);
                     const formattedPriceVal = formatPrice(o.p, exp);
                     const vals = editValues[o.orderId] || { p: formattedPriceVal, q: o.q.toString() };
                     const isModified = vals.p !== formattedPriceVal || vals.q !== o.q.toString();
@@ -155,6 +218,15 @@ export const OpenOrders: React.FC<OpenOrdersProps> = ({
                             onKeyDown={(e) => handleKeyDown(e, o)}
                             onBlur={() => handleRevert(o.orderId, o)}
                             allowDecimal
+                            step={(() => {
+                              // Use symbolInfo step if available and matches this order's symbol
+                              if (symbolInfo && symbolInfo.symbolId === o.symbolId && symbolInfo.priceMinStep > 0n) {
+                                const exp = symbolInfo.priceExp;
+                                if (exp >= 0) return Number(symbolInfo.priceMinStep);
+                                return Number(symbolInfo.priceMinStep) / Math.pow(10, -exp);
+                              }
+                              return 1;
+                            })()}
                             style={{ 
                               width: '70%', 
                               height: '22px', 

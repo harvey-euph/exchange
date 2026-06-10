@@ -18,7 +18,7 @@ public:
     virtual ~ExecutionReporter() = default;
 
     virtual void onRequest(const OrderRequest* req) = 0;
-    virtual void onAck(const OrderRequest* req, size_t price_index) = 0;
+    virtual void onAck(const OrderRequest* req) = 0;
     virtual void onCancelled(const OrderRequest* req) = 0;
     virtual void onModified(const OrderRequest* req) = 0;
     virtual void onReject(const OrderRequest* req, RejectCode code) = 0;
@@ -33,7 +33,7 @@ class StdoutExecutionReporter final : public ExecutionReporter
 {
 public:
     void onRequest(const OrderRequest* req) override;
-    void onAck(const OrderRequest* req, size_t price_index) override;
+    void onAck(const OrderRequest* req) override;
     void onCancelled(const OrderRequest* req) override;
     void onModified(const OrderRequest* req) override;
     void onReject(const OrderRequest* req, RejectCode code) override;
@@ -47,11 +47,11 @@ public:
 class ClientExecutionReporter final : public ExecutionReporter
 {
 public:
-    ClientExecutionReporter(const std::string& ring_name = ORDER_RESPONSE, unsigned int ring_size = ORDER_RESPONSE_SIZE);
-    ~ClientExecutionReporter();
+    ClientExecutionReporter(SHMRingBuffer* ring);
+    ~ClientExecutionReporter() = default;
 
     void onRequest(const OrderRequest* req) override;
-    void onAck(const OrderRequest* req, size_t price_index) override;
+    void onAck(const OrderRequest* req) override;
     void onCancelled(const OrderRequest* req) override;
     void onModified(const OrderRequest* req) override;
     void onReject(const OrderRequest* req, RejectCode code) override;

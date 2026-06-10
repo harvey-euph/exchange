@@ -186,6 +186,9 @@ private:
     void manage_quotes() {
         int64_t inventory = account_.get_position(target_symbol_);
         
+        auto it = symbols_info_.find(target_symbol_);
+        int64_t step = (it != symbols_info_.end()) ? it->second->price_min_step : 1;
+
         // 7. Inventory-Aware Quoting (Avellaneda-Stoikov Inspired)
         // Reservation price shifts away from inventory
         double inventory_skew = -inventory * inventory_risk_aversion_;
@@ -193,16 +196,24 @@ private:
 
         // 6. Dynamic Spread Model
         // Base spread + volatility penalty + toxicity penalty + inventory absolute penalty
-        double base_half_spread = 2.0;
-        double volatility_penalty = std::abs(obi_) * 1.5; // Wider when book is imbalanced
-        double toxicity_penalty = std::abs(toxicity_) * 3.0; // Wider when flow is toxic
-        double inventory_penalty = std::abs(inventory) * 0.1;
+        double base_half_spread = 2.0 * step;
+        double volatility_penalty = std::abs(obi_) * 1.5 * step; // Wider when book is imbalanced
+        double toxicity_penalty = std::abs(toxicity_) * 3.0 * step; // Wider when flow is toxic
+        double inventory_penalty = std::abs(inventory) * 0.1 * step;
 
         double dynamic_half_spread = base_half_spread + volatility_penalty + toxicity_penalty + inventory_penalty;
 
         // Calculate Target Quotes
-        int64_t target_bid = static_cast<int64_t>(std::round(reservation_price - dynamic_half_spread));
-        int64_t target_ask = static_cast<int64_t>(std::round(reservation_price + dynamic_half_spread));
+        double raw_bid = reservation_price - dynamic_half_spread;
+        double raw_ask = reservation_price + dynamic_half_spread;
+
+        int64_t target_bid = static_cast<int64_t>(std::round(raw_bid / step)) * step;
+        int64_t target_ask = static_cast<int64_t>(std::round(raw_ask / step)) * step;
+
+        if (it != symbols_info_.end()) {
+            target_bid = std::max(it->second->price_min, std::min(it->second->price_max, target_bid));
+            target_ask = std::max(it->second->price_min, std::min(it->second->price_max, target_ask));
+        }
 
         // Quote Fade Logic (Don't quote if extremely toxic)
         bool quote_bid = toxicity_ > -0.8; 
@@ -215,13 +226,13 @@ private:
             if (o.symbol_id != target_symbol_) continue;
 
             if (o.side == Side_Buy) {
-                if (!quote_bid || std::abs(o.p - target_bid) > 1.0) {
+                if (!quote_bid || std::abs(o.p - target_bid) > 1.0 * step) {
                     cancel_order(o.order_id, target_symbol_, o.side);
                 } else {
                     has_bid = true;
                 }
             } else if (o.side == Side_Sell) {
-                if (!quote_ask || std::abs(o.p - target_ask) > 1.0) {
+                if (!quote_ask || std::abs(o.p - target_ask) > 1.0 * step) {
                     cancel_order(o.order_id, target_symbol_, o.side);
                 } else {
                     has_ask = true;

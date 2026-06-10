@@ -1,6 +1,7 @@
 #include "ClientManager.hpp"
 #include "ring/SHMRingBuffer.hpp"
 #include "ClientDatabase.hpp"
+#include "DbUtil.hpp"
 #include "ThreadUtil.hpp"
 #include "AffinityConfig.hpp"
 #include "SignalHandler.hpp"
@@ -10,7 +11,7 @@ int main()
 {
     setup_signals();
 
-    auto db = std::make_shared<Exchange::InMemoryClientDatabase>();
+    auto db = std::make_shared<Exchange::PostgresClientDatabase>(Exchange::DbUtil::getConnectionString());
 
     Exchange::SHMRingBuffer* response_ring = nullptr;
     Exchange::SHMRingBuffer* request_ring = nullptr;

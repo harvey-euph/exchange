@@ -35,13 +35,32 @@ public:
     void on_timer() override {
         if (!shm_ptr_) return;
 
+        static bool shm_initialized = false;
+        if (!shm_initialized) {
+            auto it = symbols_info_.find(1);
+            if (it != symbols_info_.end()) {
+                const auto& info = it->second;
+                double mid_price = (info->price_min + info->price_max) / 2.0;
+                shm_ptr_->curr_price = mid_price;
+                shm_ptr_->last_price = mid_price;
+                shm_initialized = true;
+            }
+        }
+
         // 1. Update Price in SHM (Random Walk)
         double current_price = shm_ptr_->curr_price;
         current_price += dist_price_walk_(gen_);
         
-        // Clamp price between 4000 and 6000
-        if (current_price < 4000.0) current_price = 4000.0;
-        else if (current_price > 6000.0) current_price = 6000.0;
+        // Clamp price between info->price_min and info->price_max
+        auto it = symbols_info_.find(1);
+        if (it != symbols_info_.end()) {
+            const auto& info = it->second;
+            if (current_price < info->price_min) current_price = info->price_min;
+            else if (current_price > info->price_max) current_price = info->price_max;
+        } else {
+            if (current_price < 4000.0) current_price = 4000.0;
+            else if (current_price > 6000.0) current_price = 6000.0;
+        }
 
         shm_ptr_->update_price(current_price);
 
@@ -80,7 +99,7 @@ private:
             return;
         }
         
-        // Initial state
+        // Initial state (on_timer will overwrite with DB values)
         shm_ptr_->sequence = 0;
         shm_ptr_->curr_price = 5000.0;
         shm_ptr_->last_price = 5000.0;
@@ -95,27 +114,38 @@ private:
         int bids = 0, asks = 0;
         std::uniform_real_distribution<> flicker_dist(0.0, 1.0);
         
+        auto it = symbols_info_.find(1);
+        int64_t step = (it != symbols_info_.end()) ? it->second->price_min_step : 1;
+
         // 1. Handle existing orders: Retreat, Cancel, or Flicker
         for (const auto& o : open_orders) {
             double p = static_cast<double>(o.p);
             bool should_flicker = flicker_dist(gen_) < 0.15; // 15% chance to replace anyway
 
             if (o.side == Side_Buy) {
-                if (p > estimation - 1.0 || should_flicker) {
-                    double new_p = estimation - 1.5 - std::abs(dist_noise_(gen_));
-                    replace_order(o.order_id, static_cast<int64_t>(std::round(new_p)), o.q, o.symbol_id, o.side);
+                if (p > estimation - 1.0 * step || should_flicker) {
+                    double new_p = estimation - 1.5 * step - std::abs(dist_noise_(gen_)) * step;
+                    int64_t rounded_new_p = std::round(new_p / step) * step;
+                    if (it != symbols_info_.end()) {
+                        rounded_new_p = std::max(it->second->price_min, std::min(it->second->price_max, rounded_new_p));
+                    }
+                    replace_order(o.order_id, rounded_new_p, o.q, o.symbol_id, o.side);
                     bids++;
-                } else if (p < estimation - 60.0) { // Keep some depth
+                } else if (p < estimation - 60.0 * step) { // Keep some depth scaled by step
                     cancel_order(o.order_id, o.symbol_id, o.side);
                 } else {
                     bids++;
                 }
             } else if (o.side == Side_Sell) {
-                if (p < estimation + 1.0 || should_flicker) {
-                    double new_p = estimation + 1.5 + std::abs(dist_noise_(gen_));
-                    replace_order(o.order_id, static_cast<int64_t>(std::round(new_p)), o.q, o.symbol_id, o.side);
+                if (p < estimation + 1.0 * step || should_flicker) {
+                    double new_p = estimation + 1.5 * step + std::abs(dist_noise_(gen_)) * step;
+                    int64_t rounded_new_p = std::round(new_p / step) * step;
+                    if (it != symbols_info_.end()) {
+                        rounded_new_p = std::max(it->second->price_min, std::min(it->second->price_max, rounded_new_p));
+                    }
+                    replace_order(o.order_id, rounded_new_p, o.q, o.symbol_id, o.side);
                     asks++;
-                } else if (p > estimation + 60.0) {
+                } else if (p > estimation + 60.0 * step) {
                     cancel_order(o.order_id, o.symbol_id, o.side);
                 } else {
                     asks++;
@@ -126,14 +156,22 @@ private:
         // 2. Replenish Liquidity: Maintain at least 12 orders on each side
         int target_per_side = 12;
         for (int i = bids; i < target_per_side; ++i) {
-            double p = estimation - 1.5 - std::abs(dist_noise_(gen_));
+            double p = estimation - 1.5 * step - std::abs(dist_noise_(gen_)) * step;
+            int64_t rounded_p = std::round(p / step) * step;
+            if (it != symbols_info_.end()) {
+                rounded_p = std::max(it->second->price_min, std::min(it->second->price_max, rounded_p));
+            }
             uint64_t q = std::uniform_int_distribution<uint64_t>(5, 50)(gen_);
-            new_limit_order(1, Side_Buy, static_cast<int64_t>(std::round(p)), q);
+            new_limit_order(1, Side_Buy, rounded_p, q);
         }
         for (int i = asks; i < target_per_side; ++i) {
-            double p = estimation + 1.5 + std::abs(dist_noise_(gen_));
+            double p = estimation + 1.5 * step + std::abs(dist_noise_(gen_)) * step;
+            int64_t rounded_p = std::round(p / step) * step;
+            if (it != symbols_info_.end()) {
+                rounded_p = std::max(it->second->price_min, std::min(it->second->price_max, rounded_p));
+            }
             uint64_t q = std::uniform_int_distribution<uint64_t>(5, 50)(gen_);
-            new_limit_order(1, Side_Sell, static_cast<int64_t>(std::round(p)), q);
+            new_limit_order(1, Side_Sell, rounded_p, q);
         }
     }
 

@@ -223,6 +223,15 @@ private:
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
 
+        if (!config_.symbol_ids.empty()) {
+            uint32_t symbol_id = config_.symbol_ids[0];
+            auto it = symbols_info_.find(symbol_id);
+            if (it != symbols_info_.end()) {
+                const auto& info = it->second;
+                mid_price_ = (info->price_min + info->price_max) / 2;
+            }
+        }
+
         step_start_time_ = std::chrono::steady_clock::now();
         last_response_time_ = std::chrono::steady_clock::now();
 
@@ -239,11 +248,17 @@ private:
     void do_trading_action() {
         if (config_.symbol_ids.empty()) return;
         uint32_t symbol_id = config_.symbol_ids[0];
+        auto it = symbols_info_.find(symbol_id);
+        int64_t step = (it != symbols_info_.end()) ? it->second->price_min_step : 1;
 
         // Random walk of the mid price (5% chance per action to shift by 1 tick)
         if (dist_action_(gen_) < 0.05) {
-            mid_price_ += (std::uniform_int_distribution<int>(0, 1)(gen_) == 0 ? 1 : -1);
-            if (mid_price_ < 1000) mid_price_ = 1000;
+            mid_price_ += (std::uniform_int_distribution<int>(0, 1)(gen_) == 0 ? step : -step);
+            if (it != symbols_info_.end()) {
+                mid_price_ = std::max(it->second->price_min, std::min(it->second->price_max, mid_price_));
+            } else {
+                if (mid_price_ < 1000) mid_price_ = 1000;
+            }
         }
 
         auto open_orders = account_.get_open_orders();
@@ -268,9 +283,14 @@ private:
     }
 
     void build_depth_scenario(uint32_t symbol_id) {
+        auto it = symbols_info_.find(symbol_id);
+        int64_t step = (it != symbols_info_.end()) ? it->second->price_min_step : 1;
         bool is_buy = dist_buy_sell_(gen_);
-        int64_t level = std::uniform_int_distribution<int64_t>(1, 5)(gen_);
+        int64_t level = std::uniform_int_distribution<int64_t>(1, 5)(gen_) * step;
         int64_t price = is_buy ? (mid_price_ - level) : (mid_price_ + level);
+        if (it != symbols_info_.end()) {
+            price = std::max(it->second->price_min, std::min(it->second->price_max, price));
+        }
         uint64_t qty = std::uniform_int_distribution<uint64_t>(20, 100)(gen_);
 
         new_limit_order(symbol_id, is_buy ? Side_Buy : Side_Sell, price, qty);
@@ -278,8 +298,13 @@ private:
     }
 
     void take_one_layer_scenario(uint32_t symbol_id) {
+        auto it = symbols_info_.find(symbol_id);
+        int64_t step = (it != symbols_info_.end()) ? it->second->price_min_step : 1;
         bool is_buy = dist_buy_sell_(gen_);
-        int64_t price = is_buy ? (mid_price_ + 1) : (mid_price_ - 1);
+        int64_t price = is_buy ? (mid_price_ + step) : (mid_price_ - step);
+        if (it != symbols_info_.end()) {
+            price = std::max(it->second->price_min, std::min(it->second->price_max, price));
+        }
         uint64_t qty = std::uniform_int_distribution<uint64_t>(10, 40)(gen_);
 
         new_limit_order(symbol_id, is_buy ? Side_Buy : Side_Sell, price, qty);
@@ -287,8 +312,13 @@ private:
     }
 
     void sweep_multi_layers_scenario(uint32_t symbol_id) {
+        auto it = symbols_info_.find(symbol_id);
+        int64_t step = (it != symbols_info_.end()) ? it->second->price_min_step : 1;
         bool is_buy = dist_buy_sell_(gen_);
-        int64_t price = is_buy ? (mid_price_ + 5) : (mid_price_ - 5);
+        int64_t price = is_buy ? (mid_price_ + 5 * step) : (mid_price_ - 5 * step);
+        if (it != symbols_info_.end()) {
+            price = std::max(it->second->price_min, std::min(it->second->price_max, price));
+        }
         uint64_t qty = std::uniform_int_distribution<uint64_t>(150, 500)(gen_);
 
         new_limit_order(symbol_id, is_buy ? Side_Buy : Side_Sell, price, qty);
@@ -298,11 +328,17 @@ private:
     void modify_back_and_forth_scenario(const std::vector<OrderResponseT>& open_orders) {
         size_t idx = std::uniform_int_distribution<size_t>(0, open_orders.size() - 1)(gen_);
         const auto& order = open_orders[idx];
+        auto it = symbols_info_.find(order.symbol_id);
+        int64_t step = (it != symbols_info_.end()) ? it->second->price_min_step : 1;
 
-        int64_t price_shift = std::uniform_int_distribution<int64_t>(-2, 2)(gen_);
-        if (price_shift == 0) price_shift = 1;
+        int64_t price_shift = std::uniform_int_distribution<int64_t>(-2, 2)(gen_) * step;
+        if (price_shift == 0) price_shift = step;
         int64_t new_price = order.p + price_shift;
-        if (new_price <= 0) new_price = 1;
+        if (it != symbols_info_.end()) {
+            new_price = std::max(it->second->price_min, std::min(it->second->price_max, new_price));
+        } else {
+            if (new_price <= 0) new_price = 1;
+        }
 
         uint64_t new_qty = order.q;
         if (dist_aggressive_(gen_) < 0.10) {

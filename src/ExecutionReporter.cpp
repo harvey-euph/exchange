@@ -47,23 +47,7 @@ void send_response(SHMRingBuffer* ring, flatbuffers::FlatBufferBuilder& fbb,
 }
 } // namespace
 
-ClientExecutionReporter::ClientExecutionReporter(const std::string& ring_name, unsigned int ring_size)
-    : fbb(256)
-{
-    try {
-        m_ring = new SHMRingBuffer(ring_name, ring_size);
-    } catch (const std::exception& e) {
-        std::cerr << "[ClientExecutionReporter] Failed to create SHMRingBuffer: " << e.what() << std::endl;
-        m_ring = nullptr;
-    }
-}
-
-ClientExecutionReporter::~ClientExecutionReporter()
-{
-    if (m_ring) {
-        delete m_ring;
-    }
-}
+ClientExecutionReporter::ClientExecutionReporter(SHMRingBuffer* ring): m_ring(ring), fbb(256) {}
 
 void StdoutExecutionReporter::onRequest(const OrderRequest* req)
 {
@@ -79,15 +63,14 @@ void StdoutExecutionReporter::onRequest(const OrderRequest* req)
                 req->client_id());
 }
 
-void StdoutExecutionReporter::onAck(const OrderRequest* req, size_t price_index)
+void StdoutExecutionReporter::onAck(const OrderRequest* req)
 {
     if (!req) return;
 
-    std::printf("[ACK] order_id=%lu client_id=%u type=%d price_idx=%zu qty=%lu ts=%lu\n",
+    std::printf("[ACK] order_id=%lu client_id=%u type=%d qty=%lu ts=%lu\n",
                 req->order_id(),
                 req->client_id(),
                 static_cast<int>(req->type()),
-                price_index,
                 req->q(),
                 req->timestamp());
 }
@@ -147,12 +130,9 @@ void ClientExecutionReporter::onRequest(const OrderRequest* req)
     print_client_channel("request", req->client_id(), req->order_id());
 }
 
-void ClientExecutionReporter::onAck(const OrderRequest* req, size_t price_index)
+void ClientExecutionReporter::onAck(const OrderRequest* req)
 {
     if (!req) return;
-    (void) price_index;
-    // std::printf("[client] event=ack client_id=%u order_id=%lu price_idx=%zu\n",
-    //             req->client_id(), req->order_id(), price_index);
     send_response(m_ring, fbb, ExecType_New, req->order_id(), req->client_id(), req->exec_id(), req->symbol_id(), req->side(), req->p(), req->q(), RejectCode_None);
 }
 

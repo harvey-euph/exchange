@@ -14,5 +14,86 @@
     - web 和 client 端都要做修改，暫時都用 symbol_id=1
     - 當自己的資料出問題 (有 cross/斷線/漏包) 都可以隨時 MarketDataRequest
 
-- [ ] 前端檢查
-    - 收到的價格要確認是
+- [x] 啟用 pgsql 服務
+    - 裝在本機，暫時只開 local 連線，啟動
+    - 建表，使用 pqxx 連線，寫好 util 讓其他人好用，放入 symbol data
+    - 先處理 symbol 就好，其他的 position/open orders/execution/client 稍後處理
+
+- [x] Exchange::OrderBook 的初始化要先 query db，拿到 min_step p_min p_max 作為參數，再用這些去算
+
+- [x] Exchange::ClientExecutionReporter 應該要在外面初始化好 ring，再放進去作為參數，簡化 ctor
+
+- [x] client 檢查 (cpp/web 都該做)，收到的價格要確認
+    - 介於 min/max 之間
+    - p_real 是 min_step 的倍數 or p 是 min_step * 10 ^{-p_exp} 的倍數 兩者等價，選方便的做
+    - 否則要報錯
+
+- [x] 讓 position/open orders/execution/client 也用 pgsql query
+
+- [ ] ExecutionReporter / ring 傳輸格式重新評估（double-serialization 問題）
+
+  **重新評估後的實際問題**
+
+  `ClientExecutionReporter` 做的事其實很輕量——它只有：
+  - FlatBuffers 序列化成 `OrderResponse`
+  - `ring->enqueue`
+  - 讀取 `g_current_request_start_tsc` 計算 engine latency
+
+  所有真正的 client-wise 工作（position update、session lookup、WebSocket send、DB 寫入）
+  都已經正確地在 `ClientManager::handle_execution_response` 裡執行，不在 engine thread 裡。
+  架構的職責分離其實**比表面看起來好**，第一次評估過於激進。
+
+  **真正的問題：Double serialization**
+
+  ```
+  Engine thread:
+    OrderRequest → OrderBook → ClientExecutionReporter
+      → CreateOrderResponse (fbb) → ring->enqueue  ← 第一次序列化
+
+  ClientManager thread:
+    ring->dequeue → OrderResponse*
+      → CreateOrderResponse (fbb, 加入 total_lat)
+      → CreateClientResponse (fbb, 包成 union wrapper)
+      → ws send / db store                           ← 第二次序列化
+  ```
+
+  Ring 上傳的是裸 `OrderResponse`（沒有 `ClientResponse` wrapper），
+  到了 manager 端要傳給 WebSocket 卻需要 `ClientResponse` wrapper，
+  所以 manager **必須重新序列化一次**才能送出去，兩次序列化做的事 90% 重疊。
+
+  **附帶的真實 bug：`onFill` hardcoded `symbol_id = 1`**
+
+  ```cpp
+  // ExecutionReporter.cpp line 178
+  send_response(m_ring, fbb, ..., 1, taker_side, ...);  // symbol_id 寫死
+  send_response(m_ring, fbb, ..., 1, maker_side, ...);  // symbol_id 寫死
+  ```
+
+  `Order` struct 沒有存 `symbol_id`（`OrderBook` 自己知道，但不往下傳），
+  所以 `onFill` 拿不到正確的 `symbol_id`，暫時用 1 代替。
+  這在 multi-symbol 的情況下會導致 position update 記到錯誤的 symbol。
+
+  ---
+
+  **改法選項**
+
+  **選項 A：Ring 上直接傳 `ClientResponse`（最小改動）**
+  - `ClientExecutionReporter` 改成直接序列化成 `ClientResponse`（包含 union wrapper），
+    ring 上的 payload 就是最終格式。
+  - Manager 端 `poll_server` 收到後可以**直接** forward 給 WebSocket，不需要重新序列化。
+  - `handle_execution_response` 還是需要解析裡面的 `OrderResponse` 來做 position update，
+    但可以省掉最後的 re-serialization。
+  - 缺點：engine thread 的 payload 稍微大一點（多一層 union wrapper，影響不大）。
+
+  **選項 B：Ring 上傳輕量 POD EngineEvent，manager 做唯一一次序列化**
+  - 定義 POD struct `EngineEvent`（非 FlatBuffers，純 C struct），只帶 engine 知道的欄位：
+    `exec_type, order_id, client_id, exec_id, symbol_id, side, p, q, reject_code, engine_lat_tsc`。
+  - Engine thread 完全不做 FlatBuffers 序列化，只 memcpy POD 到 ring。
+  - Manager thread 收到 POD 後，加入 `total_lat`，做唯一一次 FlatBuffers 序列化成 `ClientResponse`。
+  - 優點：engine hot path 最乾淨，只有一次序列化；FlatBuffers 的 build 開銷全移到 manager。
+  - 缺點：需要另外定義 ring 上的 event 格式（與 fbs 不共用），有點額外的維護成本。
+
+  **修 `symbol_id` bug（獨立，優先）**
+  - `Order` struct 加入 `symbol_id` 欄位（從 `OrderRequest::symbol_id()` 複製進去），
+    或者 `onFill` 的 interface 多加一個 `uint32_t symbol_id` 參數。
+  - 後者改動面較小，只需修改 `ExecutionReporter` 虛擬介面和 `OrderBook::match()` 的呼叫端。

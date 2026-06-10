@@ -35,7 +35,8 @@ EXAMPLE_DIR := app/client-examples
 TEST_DIR := tests
 FBS_DIR := fbs
 FBS_OUT := include/fbs
-LDLIBS := -lgtest -lgtest_main -pthread -lrt
+LDLIBS := -lgtest -lgtest_main -pthread -lrt -lpqxx -lpq
+TEST_LDLIBS := -lgtest -lgtest_main -pthread -lrt
 
 # -----------------------------------------------------------------------------
 # FlatBuffers
@@ -155,7 +156,7 @@ $(BUILD_DIR)/app/perf/%: $(OBS_DIR)/%.cpp $(SRC_OBJECTS) $(FBS_GENERATED)
 
 $(BUILD_DIR)/tests/%: $(TEST_DIR)/%.cpp $(SRC_OBJECTS) $(FBS_GENERATED)
 	@mkdir -p $(BUILD_DIR)/tests
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $< $(SRC_OBJECTS) $(LDLIBS) -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $< $(filter-out $(BUILD_DIR)/PostgresClientDatabase.o $(BUILD_DIR)/ClientManager.o $(BUILD_DIR)/AlgoTradingClient.o,$(SRC_OBJECTS)) $(TEST_LDLIBS) -o $@
 
 # -----------------------------------------------------------------------------
 # Run Tests
