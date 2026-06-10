@@ -3,8 +3,8 @@
 本文檔記錄了將 `web` 前端通過 Nginx 暴露到外部網路的設置步驟。
 
 ## 📁 檔案說明
-- [exchange.conf](file:///home/andy16384/exchange/exchange-core/web/nginx/exchange.conf): Nginx 伺服器配置檔範本。
-- [setup_nginx.sh](file:///home/andy16384/exchange/exchange-core/web/nginx/setup_nginx.sh): 自動化安裝與設定腳本。
+- [exchange.conf](file:///home/andy16384/exchange/nginx/exchange.conf): Nginx 伺服器配置檔範本。
+- [setup_nginx.sh](file:///home/andy16384/exchange/nginx/setup_nginx.sh): 自動化安裝與設定腳本。
 
 ## 🚀 快速開始 (自動化腳本)
 我們提供了一個自動化腳本來處理所有事情（安裝 Nginx/Node.js/NPM、編譯前端、套用 Nginx 設定、解決權限問題並啟動服務）：

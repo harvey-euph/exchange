@@ -15,7 +15,19 @@ REAL_GROUP=$(id -gn "$REAL_USER")
 
 # Resolve absolute paths
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-FRONTEND_DIR="$( cd "$SCRIPT_DIR/.." &> /dev/null && pwd )"
+
+if [ -f "$SCRIPT_DIR/../web/package.json" ]; then
+  FRONTEND_DIR="$( cd "$SCRIPT_DIR/../web" &> /dev/null && pwd )"
+elif [ -f "$SCRIPT_DIR/../package.json" ]; then
+  FRONTEND_DIR="$( cd "$SCRIPT_DIR/.." &> /dev/null && pwd )"
+else
+  echo "Error: Could not locate frontend directory containing package.json."
+  echo "Looked in:"
+  echo "  - $SCRIPT_DIR/../web"
+  echo "  - $SCRIPT_DIR/.."
+  exit 1
+fi
+
 DIST_DIR="$FRONTEND_DIR/dist"
 
 echo "=== 1. Installing System Packages (Nginx, Node.js, NPM) ==="
