@@ -288,11 +288,11 @@ struct WSAdaptor::Impl {
         ioc.stop();
     }
 
-    void poll() {
+    size_t poll() {
         if (ioc.stopped()) {
             ioc.restart();
         }
-        ioc.poll();
+        return ioc.poll();
     }
 };
 
@@ -300,8 +300,8 @@ WSAdaptor::WSAdaptor(int port) : pimpl_(std::make_unique<Impl>(port)) {}
 
 WSAdaptor::~WSAdaptor() = default;
 
-void WSAdaptor::poll() {
-    pimpl_->poll();
+size_t WSAdaptor::poll() {
+    return pimpl_->poll();
 }
 
 void WSAdaptor::publish(const Exchange::L2Update* l2_update, const void* raw_data, size_t raw_size) {

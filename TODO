@@ -1,6 +1,6 @@
 ## TODO
 
-- [ ] 讓 polling model 變成 template，所有 service 都可以變成一個 Worker 的 subclass
+- [x] 讓 polling model 變成 template，所有 service 都可以變成一個 Worker 的 subclass
     - 擁有雙邊 polling 行為，我想看到的設計是下列或是同等邏輯更好的寫法
 
 ```cpp

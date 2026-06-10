@@ -19,14 +19,16 @@
 #include <algorithm>
 #include "define.hpp"
 #include "SignalHandler.hpp"
+#include "Worker.hpp"
 
 namespace Exchange {
 
-class ClientManager {
+class ClientManager : public Worker<ClientManager> {
 public:
-    ClientManager(int port, SHMRingBuffer* request_ring, std::shared_ptr<ClientDatabase> db) 
+    ClientManager(int port, SHMRingBuffer* request_ring, SHMRingBuffer* response_ring, std::shared_ptr<ClientDatabase> db) 
         : ws_adaptor_(std::make_shared<WSAdaptor>(port))
         , request_ring_(request_ring)
+        , response_ring_(response_ring)
         , db_(db)
     {
         // telemetry_ = std::make_unique<TelemetryProvider>(EXCHANGE_TELEMETRY, false);
@@ -275,8 +277,21 @@ public:
         }
     }
 
-    void poll() {
-        ws_adaptor_->poll();
+    int poll_client() {
+        return ws_adaptor_->poll() > 0 ? 1 : 0;
+    }
+
+    int poll_server() {
+        void* data_ptr = nullptr;
+        size_t data_size = 0;
+        if (response_ring_->dequeue(&data_ptr, &data_size)) {
+            if (data_ptr && data_size > 0) {
+                auto resp = flatbuffers::GetRoot<Exchange::OrderResponse>(data_ptr);
+                handle_execution_response(resp, data_ptr, data_size);
+                return 1;
+            }
+        }
+        return 0;
     }
 
 private:
@@ -291,6 +306,7 @@ private:
 
     std::shared_ptr<WSAdaptor> ws_adaptor_;
     SHMRingBuffer* request_ring_;
+    SHMRingBuffer* response_ring_;
     std::shared_ptr<ClientDatabase> db_;
     std::map<uint32_t, std::vector<WSClientPtr>> client_sessions_;
     std::map<uint32_t, std::shared_ptr<std::mutex>> client_locks_;
@@ -318,30 +334,14 @@ int main()
         return -1;
     }
 
-    Exchange::ClientManager manager(9001, request_ring, db);
+    Exchange::ClientManager manager(9001, request_ring, response_ring, db);
 
     int main_core = CM_MAIN_CORE;
     if (main_core >= 0) {
         Exchange::set_thread_affinity(main_core, "ClientManager_Main");
     }
 
-    void* data_ptr = nullptr;
-    size_t data_size = 0;
-
-    while (g_running.load(std::memory_order_relaxed))
-    {
-        manager.poll();
-
-        if (response_ring->dequeue(&data_ptr, &data_size))
-        {
-            if (data_ptr && data_size > 0) {
-                auto resp = flatbuffers::GetRoot<Exchange::OrderResponse>(data_ptr);
-                manager.handle_execution_response(resp, data_ptr, data_size);
-            }
-        } else {
-            POLL_BACKOFF();
-        }
-    }
+    manager.run();
 
     delete response_ring;
     delete request_ring;
