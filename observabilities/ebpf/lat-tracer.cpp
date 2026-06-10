@@ -11,7 +11,7 @@
 #include <chrono>
 #include <thread>
 #include <bpf/libbpf.h>
-#include "ws_monitor.skel.h"
+#include "lat-tracer.skel.h"
 #include "fbs/order_generated.h"
 #include "define.hpp"
 #include "TimeUtil.hpp"
@@ -381,7 +381,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    struct ws_monitor_bpf *skel = ws_monitor_bpf__open();
+    struct lat_tracer_bpf *skel = lat_tracer_bpf__open();
     if (!skel) {
         std::cerr << "Failed to open BPF skeleton\n";
         return 1;
@@ -389,24 +389,24 @@ int main(int argc, char *argv[]) {
 
     skel->rodata->target_port = selected_port;
 
-    int err = ws_monitor_bpf__load(skel);
+    int err = lat_tracer_bpf__load(skel);
     if (err) {
         std::cerr << "Failed to load BPF skeleton\n";
-        ws_monitor_bpf__destroy(skel);
+        lat_tracer_bpf__destroy(skel);
         return 1;
     }
 
-    err = ws_monitor_bpf__attach(skel);
+    err = lat_tracer_bpf__attach(skel);
     if (err) {
         std::cerr << "Failed to attach BPF skeleton\n";
-        ws_monitor_bpf__destroy(skel);
+        lat_tracer_bpf__destroy(skel);
         return 1;
     }
 
     struct ring_buffer *ring_buf = ring_buffer__new(bpf_map__fd(skel->maps.rb), handle_event, nullptr, nullptr);
     if (!ring_buf) {
         std::cerr << "Failed to create ring buffer manager\n";
-        ws_monitor_bpf__destroy(skel);
+        lat_tracer_bpf__destroy(skel);
         return 1;
     }
 
@@ -430,7 +430,7 @@ int main(int argc, char *argv[]) {
     }
 
     ring_buffer__free(ring_buf);
-    ws_monitor_bpf__destroy(skel);
+    lat_tracer_bpf__destroy(skel);
     
     std::cout << "\n[Latency Tracer] Final Latency Summary:\n";
     last_printed_lines = 0;

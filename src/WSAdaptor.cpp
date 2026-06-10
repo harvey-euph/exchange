@@ -232,6 +232,9 @@ public:
             for (;;) {
                 tcp::socket socket = co_await acceptor_.async_accept(net::use_awaitable);
                 
+                boost::system::error_code ec_nodelay;
+                socket.set_option(tcp::no_delay(true), ec_nodelay);
+                
                 auto session = std::make_shared<WSSession>(std::move(socket), sub_handler_, msg_handler_, close_handler_);
                 std::cout << "[WSListener] Accepted new connection. Starting session..." << std::endl;
                 {

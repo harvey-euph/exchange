@@ -105,10 +105,7 @@ void OrderBook::handleNewOrder(const OrderRequest* req, bool report_ack)
     
     PriceLevel **oppo = &best_levels_[1^side_int];
 
-    if (report_ack) {
-        size_t ack_idx = (req->type() == OrderType_Market) ? 0 : price_to_index(req->p());
-        reporter_->onAck(req, ack_idx);
-    }
+    size_t ack_idx = (req->type() == OrderType_Market) ? 0 : price_to_index(req->p());
 
     while (*oppo && taker->qty_remaining)
     {
@@ -126,6 +123,10 @@ void OrderBook::handleNewOrder(const OrderRequest* req, bool report_ack)
             taker->qty_remaining -= qty_fill;
             (*oppo)->total_qty   -= qty_fill;
             
+            if (report_ack) { 
+                reporter_->onAck(req, ack_idx); 
+                report_ack = false; 
+            }
             reporter_->onFill(taker, maker, req->side(), p, qty_fill);
             
             l3.update(symbol_id_, maker->qty_remaining == 0 ? ExecType_Fill : ExecType_PartialFill,
@@ -169,6 +170,11 @@ void OrderBook::handleNewOrder(const OrderRequest* req, bool report_ack)
     );
 
     active_orders_[taker->order_id] = taker;
+
+    if (report_ack) { 
+        reporter_->onAck(req, ack_idx); 
+        report_ack = false; 
+    }
 }
 
 void OrderBook::handleCancelOrder(const OrderRequest* req, bool report_cancelled)

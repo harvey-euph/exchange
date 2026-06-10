@@ -42,6 +42,10 @@ public:
         try {
             auto const results = resolver_.resolve(host_, port_);
             beast::get_lowest_layer(ws_).connect(results);
+            
+            boost::system::error_code ec_nodelay;
+            beast::get_lowest_layer(ws_).socket().set_option(tcp::no_delay(true), ec_nodelay);
+            
             ws_.handshake(host_, "/");
             return true;
         } catch (std::exception const& e) {

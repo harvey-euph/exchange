@@ -1,65 +1,32 @@
-# TODO
+## TODO
 
-- [x] When User connect to client_manager, client_manager should:
-    - [x] Send pending executions (OrderResponse)
-    - [x] Send current open order as OrderResponse with ExecType=OrderStatus
-    - [x] Send current positions for all non-zero asset and cash(symbol_id=0)
-    - [x] Set ready for this client session and allow client request, before this, reject client session (this is control by sessio-wise)
-    - [x] Send ready frame (OrderResponse with ExecType=Complete) to client to inform start accepting request.
-- [x] DB 
-    - [x] support above features, storing open_orders_ like pending_responses_ and positions_
-    - [x] support loop through open_orders_, pending_responses_ and positions_ for a client.
-- [x] client_manager
-    - [x] Record open order by OrderResponse, change all ExecType to OrderStatus, in handle_execution_response
+- [ ] 讓 polling model 變成 template，所有 service 都可以變成一個 Worker 的 subclass
+    - 擁有雙邊 polling 行為，我想看到的設計是下列或是同等邏輯更好的寫法
 
-- [ ] Ability check for:
-    - [ ] Max Order Entry TPS
-    - [ ] Max Matching TPS
-    - [ ] Max Market Data TPS
-    - [ ] Max Concurrent Connections
-    - [ ] Max Fanout ability
-    - [ ] P99 Latency 
-    - [ ] Who die first when extreme situation
+```cpp
+while (g_running)
+{
+#ifdef PRODUCTION_MODE
+    worker->poll_client();
+    worker->poll_server();
+    POLL_BACKOFF(); 
+#else
+    int has_task = 0;
+    has_task |= worker->poll_client(); // 0 or 1
+    has_task |= worker->poll_server(); // 0 or 1
+    if (!has_task) {
+        POLL_BACKOFF(); 
+    }
+#endif
+}
+```
+    
+- [ ] **Price**
+    - i64 price -> struct Price { i64 m; i8 e; }; (price = m * 10^e)
+    - 要和 fbs 良好整合
 
-# Comment below
-
-=========================================================================================================================
-                                       STRESS TESTING STEP-LOAD TEST REPORT
-=========================================================================================================================
-| Time     |   Interval    |   Rate        | Avg RTT      | Max RTT     | Pea k Ring Occupancy                      | Telemetry Avg Latency
--------------------------------------------------------------------------------------------------------------------------
-|   1 min  |     100.00 ms |      10.1 tps |  1868.0 us   |  4449.1 us  | Req: 0.0%, Resp: 0.0%, L2: 0.0%, L3: 0.0% | Core:30.91us, Mgmt:66.22us, E2E:1223.04us |
-|   2 min  |      70.00 ms |      14.3 tps |  1848.8 us   |  5398.0 us  | Req: 0.0%, Resp: 0.0%, L2: 0.0%, L3: 0.0% | Core:29.94us, Mgmt:69.34us, E2E:1239.45us |
-|   3 min  |      49.00 ms |      20.4 tps |  1816.5 us   |  4651.3 us  | Req: 0.0%, Resp: 0.0%, L2: 0.0%, L3: 0.0% | Core:29.24us, Mgmt:66.34us, E2E:1197.73us |
-|   4 min  |      34.30 ms |      29.0 tps | 34164.2 us   | 40316.8 us  | Req: 0.0%, Resp: 0.0%, L2: 0.0%, L3: 0.0% | Core:28.13us, Mgmt:58.32us, E2E:1153.96us |
-|   5 min  |      24.01 ms |      41.4 tps | 24095.0 us   | 34540.2 us  | Req: 0.0%, Resp: 0.0%, L2: 0.0%, L3: 0.0% | Core:26.48us, Mgmt:60.09us, E2E:1171.75us |
-|   6 min  |      16.81 ms |      59.1 tps | 16998.8 us   | 24251.5 us  | Req: 0.0%, Resp: 0.0%, L2: 0.0%, L3: 0.0% | Core:24.23us, Mgmt:53.04us, E2E:1167.21us |
-|   7 min  |      11.76 ms |      84.2 tps | 11871.0 us   | 17014.7 us  | Req: 0.0%, Resp: 0.0%, L2: 0.0%, L3: 0.0% | Core:24.05us, Mgmt:52.56us, E2E:1096.46us |
-|   8 min  |       8.24 ms |     119.8 tps |  8440.8 us   | 12463.8 us  | Req: 0.0%, Resp: 0.0%, L2: 0.0%, L3: 0.0% | Core:23.21us, Mgmt:53.04us, E2E:1154.79us |
-|   9 min  |       5.76 ms |     169.9 tps |  5989.6 us   | 33043.7 us  | Req: 0.0%, Resp: 7.0%, L2: 0.8%, L3: 4.6% | Core:24.03us, Mgmt:59.62us, E2E:1192.43us |
-|  10 min  |       4.04 ms |     241.3 tps |  4258.8 us   | 12822.3 us  | Req: 0.0%, Resp: 8.8%, L2: 0.4%, L3: 2.1% | Core:20.72us, Mgmt:53.40us, E2E:1164.01us |
-|  11 min  |       2.82 ms |     340.8 tps |  3051.8 us   | 18426.5 us  | Req: 0.6%, Resp:10.7%, L2: 2.6%, L3:12.8% | Core:19.22us, Mgmt:51.38us, E2E:1163.36us |
-|  12 min  |       1.98 ms |     475.2 tps |  2317.8 us   | 10628.2 us  | Req: 1.2%, Resp:16.2%, L2: 3.0%, L3:14.4% | Core:18.16us, Mgmt:51.10us, E2E:1225.21us |
-|  13 min  |       1.38 ms |     646.1 tps |  2344.9 us   | 54887.2 us  | Req: 7.0%, Resp:16.2%, L2: 4.4%, L3:15.8% | Core:18.81us, Mgmt:67.68us, E2E:1242.25us |
-|  14 min  |       0.97 ms |     863.1 tps |  9402.8 us   | 303410.0 us  | Req:28.2%, Resp:99.6%, L2:23.6%, L3:100.0% | Core:17.09us, Mgmt:99.96us, E2E:1677.53us |
-|  15 min  |       0.68 ms |     532.3 tps | 69682.7 us   | 725802.3 us  | Req:51.6%, Resp:99.7%, L2:76.6%, L3:99.8% | Core:24.92us, Mgmt:190.33us, E2E:5485.92us |
-
-==================================================================================================================================================================
-| Time     | Interval      | Rate          | Avg RTT      | Max RTT      | Peak Ring Occupancy                          | Telemetry Avg Latency                     |
-------------------------------------------------------------------------------------------------------------------------------------------------------------------
-|    10 s  |   100.00 ms   |    10.1 tps   |  1934.9 us   |  4129.2 us   | Req: 0.6%, Resp: 7.0%, L2: 1.9%, L3: 7.2%   | Core:32.99us, Mgmt:96.52us, E2E:1244.36us  |
-|    20 s  |    70.00 ms   |    14.2 tps   |  1835.9 us   |  2959.2 us   | Req: 0.9%, Resp:10.7%, L2: 1.9%, L3:11.3%   | Core:31.61us, Mgmt:75.09us, E2E:1182.57us  |
-|    30 s  |    49.00 ms   |    20.4 tps   |  1894.4 us   |  5040.6 us   | Req: 0.8%, Resp:11.6%, L2: 2.2%, L3:12.3%   | Core:32.01us, Mgmt:83.48us, E2E:1202.41us  |
-|    40 s  |    34.30 ms   |    29.0 tps   | 34246.2 us   | 41531.1 us   | Req: 0.9%, Resp: 7.0%, L2: 2.6%, L3: 7.6%   | Core:46.05us, Mgmt:106.20us, E2E:1414.82us |
-|    50 s  |    24.01 ms   |    41.5 tps   | 24302.8 us   | 34638.9 us   | Req: 1.1%, Resp:10.7%, L2: 2.2%, L3:11.3%   | Core:32.02us, Mgmt:74.63us, E2E:1212.63us  |
-|    60 s  |    16.81 ms   |    59.0 tps   | 16874.4 us   | 24335.9 us   | Req: 1.2%, Resp:10.7%, L2: 2.2%, L3:11.3%   | Core:30.38us, Mgmt:77.22us, E2E:1233.09us  |
-|    70 s  |    11.76 ms   |    84.3 tps   | 11930.4 us   | 26128.8 us   | Req: 1.2%, Resp:11.6%, L2: 2.6%, L3:12.3%   | Core:30.25us, Mgmt:79.93us, E2E:1218.11us  |
-|    80 s  |     8.24 ms   |   119.8 tps   |  8529.0 us   | 25374.8 us   | Req: 1.8%, Resp:15.3%, L2: 2.2%, L3:16.4%   | Core:27.71us, Mgmt:82.94us, E2E:1227.17us  |
-|    90 s  |     5.76 ms   |   170.6 tps   |  5976.8 us   |  8454.7 us   | Req: 1.2%, Resp:11.6%, L2: 2.6%, L3:12.3%   | Core:25.06us, Mgmt:70.04us, E2E:1182.24us  |
-|   100 s  |     4.04 ms   |   242.1 tps   |  4248.6 us   | 13731.5 us   | Req: 1.2%, Resp:17.2%, L2: 2.6%, L3:16.9%   | Core:22.96us, Mgmt:69.23us, E2E:1170.68us  |
-|   110 s  |     2.82 ms   |   343.0 tps   |  3260.6 us   | 35144.3 us   | Req: 2.5%, Resp:13.5%, L2: 4.9%, L3:14.4%   | Core:20.77us, Mgmt:69.47us, E2E:1216.39us  |
-|   120 s  |     1.98 ms   |   477.5 tps   |  2419.4 us   | 32182.1 us   | Req: 3.1%, Resp:13.5%, L2: 2.9%, L3:14.4%   | Core:19.35us, Mgmt:70.44us, E2E:1243.84us  |
-|   130 s  |     1.38 ms   |   662.0 tps   |  2336.3 us   | 33232.7 us   | Req: 8.9%, Resp:16.2%, L2: 8.1%, L3:17.2%   | Core:19.08us, Mgmt:76.51us, E2E:1241.76us  |
-|   140 s  |     0.97 ms   |   859.2 tps   | 65934.9 us   | 473442.7 us  | Req:43.0%, Resp:99.7%, L2:23.7%, L3:47.9%   | Core:20.43us, Mgmt:152.03us, E2E:3433.01us |
-|   150 s  |     0.68 ms   |  1079.6 tps   | 381781.5 us  | 1439147.3 us | Req:99.6%, Resp:100.0%, L2:100.0%, L3:100.0%| Core:24.30us, Mgmt:163.43us, E2E:6335.20us |
-|   160 s  |     0.47 ms   |  1969.6 tps   | 2530784.7 us | 3704349.1 us | Req:100.0%, Resp:100.0%, L2:88.8%, L3:99.9% | Core:23.58us, Mgmt:213.90us, E2E:31040.60us|
+- [ ] **SymbolTable**
+- [ ] **分離責任** requires **Price** **SymbolTable**
+    - 讓 client manager 處理所有 multi-client parallelizable 任務
+    - 讓 matching engine 處理所有 multi-symbol parallelizable 任務
+    - 現狀可能是有點混在一起

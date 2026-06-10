@@ -22,7 +22,7 @@ int main()
 
     int main_core = ME_MAIN_CORE;
     if (main_core >= 0) {
-        Exchange::set_thread_affinity(main_core, "MatchingEngine_Main");
+        Exchange::set_thread_affinity(main_core, "MatchingEngineS");
     }
 
     // Use a small trick to clear screen initially
@@ -31,7 +31,6 @@ int main()
     std::cout << "[OrderCore] Starting matching engine..." << std::endl;
 
     Exchange::ClientExecutionReporter reporter(ORDER_RESPONSE);
-    // Exchange::TelemetryProvider telemetry(EXCHANGE_TELEMETRY, false);
 
     Exchange::OrderBook book(1, 1, 2000, 8192, &reporter);
 
@@ -46,21 +45,14 @@ int main()
     {
         if (request_ring.dequeue(&data_ptr, &data_size))
         {
-            if (data_ptr && data_size > 0)
-            {
-                uint64_t start = Exchange::read_tsc_begin();
-                Exchange::g_current_request_start_tsc = start;
+            if (!data_ptr || !data_size) continue;
 
-                auto req = flatbuffers::GetRoot<Exchange::OrderRequest>(data_ptr);
-                book.processRequest(req);
+            Exchange::g_current_request_start_tsc = Exchange::read_tsc_begin();
 
-                uint64_t diff = Exchange::read_tsc_end() - start;
-                (void)diff; // Unused when telemetry is commented out
-                Exchange::g_current_request_start_tsc = 0;
-                
-                // telemetry.data()->core_count.fetch_add(1, std::memory_order_relaxed);
-                // telemetry.data()->core_cycles_sum.fetch_add(diff, std::memory_order_relaxed);
-            }
+            auto req = flatbuffers::GetRoot<Exchange::OrderRequest>(data_ptr);
+            book.processRequest(req);
+
+            Exchange::g_current_request_start_tsc = 0;
         }
         else 
         {

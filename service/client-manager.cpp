@@ -198,13 +198,10 @@ public:
         }
         
         uint64_t start_time = 0;
-        {
-            std::lock_guard<std::mutex> lock(metrics_mutex_);
-            auto it = order_start_times_.find(resp->exec_id());
-            if (it != order_start_times_.end()) {
-                start_time = it->second;
-                order_start_times_.erase(it);
-            }
+        auto start_time_it = order_start_times_.find(resp->exec_id());
+        if (start_time_it != order_start_times_.end()) {
+            start_time = start_time_it->second;
+            order_start_times_.erase(start_time_it);
         }
 
         uint64_t total_lat = start_time ? Exchange::read_tsc_end() - start_time : 0;
@@ -251,10 +248,7 @@ public:
                 auto order_req = request->data_as_OrderRequest();
                 logOrderRequest(order_req, "[ClientManager] Received Order Request:");
 
-                {
-                    std::lock_guard<std::mutex> lock(metrics_mutex_);
-                    order_start_times_[order_req->exec_id()] = Exchange::read_tsc_begin();
-                }
+                order_start_times_[order_req->exec_id()] = Exchange::read_tsc_begin();
 
                 flatbuffers::FlatBufferBuilder fbb(256);
                 auto or_offset = CreateOrderRequest(fbb, 
@@ -304,8 +298,6 @@ private:
     std::mutex sessions_mutex_;
     std::mutex ready_mutex_;
     std::unordered_map<uint64_t, uint64_t> order_start_times_;
-    std::mutex metrics_mutex_;
-    // std::unique_ptr<TelemetryProvider> telemetry_;
 };
 
 } // namespace Exchange
