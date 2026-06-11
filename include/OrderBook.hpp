@@ -7,7 +7,7 @@
 #include "L2Updater.hpp"
 #include "L3Updater.hpp"
 #include "fbs/exchange_generated.h"
-#include "ExecutionReporter.hpp"
+#include "ring/SHMRingBuffer.hpp"
 #include "Order.hpp"
 
 #include "gtest/gtest_prod.h"
@@ -55,7 +55,7 @@ public:
                        int64_t min_step,
                        int64_t price_offset,
                        size_t max_price_levels = 65536,
-                       ExecutionReporter* reporter = nullptr);
+                       SHMRingBuffer* response_ring = nullptr);
 
     ~OrderBook();
 
@@ -66,7 +66,7 @@ private:
     const int64_t min_step_;           // 最小價格單位 (定點數)
     const int64_t price_index_offset_; // 
     const size_t  max_price_levels_;   // price_array_ 大小
-    ExecutionReporter* reporter_;
+    SHMRingBuffer* response_ring_;
     L2Updater l2;
     L3Updater l3;
 
@@ -92,8 +92,9 @@ private:
     
     PriceLevel* GetOrCreatePriceLevel(size_t price_index, Side side);
     void removePriceLevel(PriceLevel* pl, Side side);
-    void match(Order* incoming);
-    void addToBook(Order* order);
+    void sendResponse(ExecType exec_type, uint64_t order_id, uint32_t client_id,
+                      uint64_t exec_id, Side side, int64_t p, uint64_t q,
+                      RejectCode reject_code = RejectCode_None);
 
     void handleNewOrder(const OrderRequest* req, bool report_ack = true);
     void handleCancelOrder(const OrderRequest* req, bool report_cancelled = true);

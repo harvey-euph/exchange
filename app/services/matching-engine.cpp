@@ -1,6 +1,5 @@
 #include "MatchingEngine.hpp"
 #include "DbUtil.hpp"
-#include "ExecutionReporter.hpp"
 #include "ThreadUtil.hpp"
 #include "AffinityConfig.hpp"
 #include "SignalHandler.hpp"
@@ -46,8 +45,7 @@ int main()
     }
 
     Exchange::SHMRingBuffer response_ring(ORDER_RESPONSE, ORDER_RESPONSE_SIZE);
-    Exchange::ClientExecutionReporter reporter(&response_ring);
-    Exchange::OrderBook book(1, min_step, price_offset, max_price_levels, &reporter);
+    Exchange::OrderBook book(1, min_step, price_offset, max_price_levels, &response_ring);
 
     Exchange::SHMRingBuffer request_ring(ORDER_REQUEST, ORDER_REQUEST_SIZE);
 

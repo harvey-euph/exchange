@@ -158,10 +158,17 @@ ClientManager::ClientManager(int port, SHMRingBuffer* request_ring, SHMRingBuffe
     std::cout << "[ClientManager] WS Handlers registered." << std::endl;
 }
 
-void ClientManager::handle_execution_response(const OrderResponseT* resp) {
+void ClientManager::handle_execution_response(const OrderResponseT* resp)
+{    
+    uint64_t start_time = 0;
+    auto start_time_it = order_start_times_.find(resp->exec_id);
+    if (start_time_it != order_start_times_.end()) {
+        start_time = start_time_it->second;
+        order_start_times_.erase(start_time_it);
+    }
     uint32_t client_id = resp->client_id;
 
-    logOrderResponse(resp, "[ClientManager] Execution Report:");
+    // logOrderResponse(resp, "[ClientManager] Execution Report:");
 
     auto lock = get_client_lock(client_id);
     std::lock_guard<std::mutex> client_guard(*lock);
@@ -176,13 +183,6 @@ void ClientManager::handle_execution_response(const OrderResponseT* resp) {
             db_->updatePosition(client_id, 0, cost); // Get USD
             db_->updatePosition(client_id, resp->symbol_id, -static_cast<int64_t>(resp->q)); // Give Asset
         }
-    }
-    
-    uint64_t start_time = 0;
-    auto start_time_it = order_start_times_.find(resp->exec_id);
-    if (start_time_it != order_start_times_.end()) {
-        start_time = start_time_it->second;
-        order_start_times_.erase(start_time_it);
     }
 
     uint64_t total_lat = start_time ? read_tsc_end() - start_time : 0;
