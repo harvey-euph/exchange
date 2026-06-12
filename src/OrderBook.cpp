@@ -100,6 +100,11 @@ void OrderBook::handleNewOrder(const OrderRequest* req, bool report_ack)
     ? (req->side() == Side_Buy ? max_price_levels_ - 1 : 0)
     : price_to_index(req->p());
     
+    if (report_ack) { 
+        sendResponse(ExecType_New, req->order_id(), req->client_id(), req->exec_id(), req->side(), req->p(), req->q());
+        report_ack = false; 
+    }
+    
     PriceLevel **oppo = &best_levels_[1^side_int];
 
     while (*oppo && taker->qty_remaining)
@@ -118,10 +123,6 @@ void OrderBook::handleNewOrder(const OrderRequest* req, bool report_ack)
             taker->qty_remaining -= qty_fill;
             (*oppo)->total_qty   -= qty_fill;
             
-            if (report_ack) { 
-                sendResponse(ExecType_New, req->order_id(), req->client_id(), req->exec_id(), req->side(), req->p(), req->q());
-                report_ack = false; 
-            }
             {
                 static thread_local std::mt19937_64 gen(std::random_device{}());
                 uint64_t rand_exec_id = gen();

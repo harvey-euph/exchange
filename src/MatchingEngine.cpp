@@ -19,8 +19,6 @@ int MatchingEngine::poll_server() {
     if (request_ring_->dequeue(&data_ptr, &data_size)) {
         if (!data_ptr || !data_size) return 0;
 
-        // g_current_request_start_tsc = read_tsc_begin();
-
         auto req = flatbuffers::GetRoot<OrderRequest>(data_ptr);
         book_->processRequest(req);
 

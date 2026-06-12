@@ -121,15 +121,6 @@ ClientManager::ClientManager(int port, SHMRingBuffer* request_ring, SHMRingBuffe
     ws_adaptor_->set_close_handler(close_handler);
 
     auto message_handler = [this](WSClientPtr client, const void* data, size_t size) {
-        // Check session readiness
-        {
-            std::lock_guard<std::mutex> ready_guard(ready_mutex_);
-            if (ready_sessions_.find(client) == ready_sessions_.end()) {
-                // Optionally send an error or just ignore
-                return;
-            }
-        }
-
         this->process_client_request(client, data, size);
     };
 
@@ -138,14 +129,58 @@ ClientManager::ClientManager(int port, SHMRingBuffer* request_ring, SHMRingBuffe
     std::cout << "[ClientManager] WS Handlers registered." << std::endl;
 }
 
+void ClientManager::process_client_request(WSClientPtr client, const void* data, size_t size)
+{    
+    (void) size;
+
+    // Check session readiness
+    {
+        std::lock_guard<std::mutex> ready_guard(ready_mutex_);
+        if (ready_sessions_.find(client) == ready_sessions_.end()) {
+            // Optionally send an error or just ignore
+            return;
+        }
+    }
+
+    auto request = flatbuffers::GetRoot<ClientRequest>(data);
+    auto type = request->data_type();
+
+    switch (type) {
+        case ClientRequestData_OrderRequest: {
+            auto order_req = request->data_as_OrderRequest();
+            
+            // logOrderRequest(order_req, "[ClientManager] Received Order Request:");
+
+            flatbuffers::FlatBufferBuilder fbb(256);
+            auto or_offset = CreateOrderRequest(fbb, 
+                order_req->action(), order_req->exec_id(), order_req->order_id(), 
+                order_req->client_id(), order_req->symbol_id(), order_req->side(), 
+                order_req->type(), order_req->p(), order_req->q(), 
+                order_req->visible_qty(), order_req->timestamp());
+            fbb.Finish(or_offset);
+            request_ring_->enqueue(fbb.GetBufferPointer(), fbb.GetSize());
+            break;
+        }
+        case ClientRequestData_PositionRequest: {
+            auto post_req = request->data_as_PositionRequest();
+            int64_t pos = db_->getPosition(post_req->client_id(), post_req->symbol_id());
+            
+            flatbuffers::FlatBufferBuilder fbb(128);
+            auto pos_resp = CreatePositionResponse(fbb, post_req->client_id(), post_req->symbol_id(), pos);
+            auto client_resp = CreateClientResponse(fbb, ClientResponseData_PositionResponse, pos_resp.Union());
+            fbb.Finish(client_resp);
+            client->send(fbb.GetBufferPointer(), fbb.GetSize());
+            break;
+        }
+        default: break;
+    }
+}
+
 void ClientManager::handle_execution_response(const OrderResponseT* resp)
 {
     uint32_t client_id = resp->client_id;
 
     // logOrderResponse(resp, "[ClientManager] Execution Report:");
-
-    auto lock = get_client_lock(client_id);
-    std::lock_guard<std::mutex> client_guard(*lock);
 
     if ((EXEC_MASK_POSITION_UPDATE >> resp->exec_type) & 1)
     {
@@ -186,42 +221,6 @@ void ClientManager::handle_execution_response(const OrderResponseT* resp)
         }
     } else {
         db_->addPendingResponse(client_id, fbb.GetBufferPointer(), fbb.GetSize());
-    }
-}
-
-void ClientManager::process_client_request(WSClientPtr client, const void* data, size_t size) {
-    (void) client; (void) size;
-    auto request = flatbuffers::GetRoot<ClientRequest>(data);
-    auto type = request->data_type();
-
-    switch (type) {
-        case ClientRequestData_OrderRequest: {
-            auto order_req = request->data_as_OrderRequest();
-            
-            // logOrderRequest(order_req, "[ClientManager] Received Order Request:");
-
-            flatbuffers::FlatBufferBuilder fbb(256);
-            auto or_offset = CreateOrderRequest(fbb, 
-                order_req->action(), order_req->exec_id(), order_req->order_id(), 
-                order_req->client_id(), order_req->symbol_id(), order_req->side(), 
-                order_req->type(), order_req->p(), order_req->q(), 
-                order_req->visible_qty(), order_req->timestamp());
-            fbb.Finish(or_offset);
-            request_ring_->enqueue(fbb.GetBufferPointer(), fbb.GetSize());
-            break;
-        }
-        case ClientRequestData_PositionRequest: {
-            auto post_req = request->data_as_PositionRequest();
-            int64_t pos = db_->getPosition(post_req->client_id(), post_req->symbol_id());
-            
-            flatbuffers::FlatBufferBuilder fbb(128);
-            auto pos_resp = CreatePositionResponse(fbb, post_req->client_id(), post_req->symbol_id(), pos);
-            auto client_resp = CreateClientResponse(fbb, ClientResponseData_PositionResponse, pos_resp.Union());
-            fbb.Finish(client_resp);
-            client->send(fbb.GetBufferPointer(), fbb.GetSize());
-            break;
-        }
-        default: break;
     }
 }
 
