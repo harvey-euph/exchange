@@ -89,8 +89,6 @@ sequenceDiagram
     Client->>Pub: Connect (WS Handshake)
     activate Pub
     
-    Note over Client, Pub: [TODO] Ability to request SNAPSHOT actively (without reconnecting)
-    
     Client->>Pub: Subscribe / Request SNAPSHOT
     
     Pub->>Client: Send Empty Frame (Side = None)
@@ -105,6 +103,10 @@ sequenceDiagram
     loop Send INCREMENTALS
         Pub->>Client: WS L2/L3 Update (Incremental)
     end
+    
+    Client->>Pub: Re-Subscribe / Request SNAPSHOT (Anytime)
+    Note over Client, Pub: Triggers a new Empty Frame & Snapshot process
+    
     deactivate Pub
 ```
 
