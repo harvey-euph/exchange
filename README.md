@@ -217,3 +217,7 @@ sequenceDiagram
 1. **Setup**: Loads the eBPF object, attaches kprobes and uprobes, and sets up the Ring Buffer.
 2. **Processing**: Polls the Ring Buffer for `latency_event` structures.
 3. **Analytics & Display**: Calculates the pure kernel networking overhead by subtracting application latencies from the total latency. Aggregates data by execution type (New, Modify, Cancel) and calculates percentiles (p50, p90, p99, p999), printing a real-time table to standard output.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
