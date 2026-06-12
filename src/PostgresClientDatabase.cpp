@@ -26,13 +26,13 @@ void PostgresClientDatabase::addPendingResponse(uint32_t client_id, const uint8_
     }
     reconnect_if_needed();
     pqxx::work w(*conn_);
-    w.exec_params(
+    w.exec(
         "INSERT INTO clients (client_id, username) VALUES ($1, $2) ON CONFLICT (client_id) DO NOTHING",
-        client_id, "client_" + std::to_string(client_id)
+        pqxx::params{client_id, "client_" + std::to_string(client_id)}
     );
-    w.exec_params(
+    w.exec(
         "INSERT INTO pending_responses (client_id, exec_id, serialized_data) VALUES ($1, $2, $3)",
-        client_id, exec_id, pqxx::binarystring(data, size)
+        pqxx::params{client_id, exec_id, pqxx::bytes_view{reinterpret_cast<const std::byte*>(data), size}}
     );
     w.commit();
 }
@@ -42,18 +42,21 @@ std::vector<PendingResponse> PostgresClientDatabase::popPendingResponses(uint32_
     reconnect_if_needed();
     std::vector<PendingResponse> result;
     pqxx::work w(*conn_);
-    pqxx::result r = w.exec_params(
+    pqxx::result r = w.exec(
         "SELECT serialized_data FROM pending_responses WHERE client_id = $1 ORDER BY response_id ASC",
-        client_id
+        pqxx::params{client_id}
     );
-    w.exec_params(
-        "DELETE FROM pending_responses WHERE client_id = $1",
-        client_id
-    );
+    w.exec("DELETE FROM pending_responses WHERE client_id = $1", pqxx::params{client_id});
     w.commit();
+    
     for (auto const& row : r) {
-        pqxx::binarystring blob(row[0]);
-        std::vector<uint8_t> data(blob.data(), blob.data() + blob.size());
+        auto bytes = row[0].as<pqxx::bytes>();
+
+        std::vector<uint8_t> data(
+            reinterpret_cast<const uint8_t*>(bytes.data()),
+            reinterpret_cast<const uint8_t*>(bytes.data()) + bytes.size()
+        );
+
         result.push_back({std::move(data)});
     }
     return result;
@@ -63,9 +66,9 @@ int64_t PostgresClientDatabase::getPosition(uint32_t client_id, uint32_t symbol_
     std::lock_guard<std::mutex> lock(mutex_);
     reconnect_if_needed();
     pqxx::work w(*conn_);
-    pqxx::result r = w.exec_params(
+    pqxx::result r = w.exec(
         "SELECT position FROM positions WHERE client_id = $1 AND symbol_id = $2",
-        client_id, symbol_id
+        pqxx::params{client_id, symbol_id}
     );
     if (r.empty()) {
         return (symbol_id == 0) ? 1000000 : 0;
@@ -77,9 +80,9 @@ std::map<uint32_t, int64_t> PostgresClientDatabase::getAllPositions(uint32_t cli
     std::lock_guard<std::mutex> lock(mutex_);
     reconnect_if_needed();
     pqxx::work w(*conn_);
-    pqxx::result r = w.exec_params(
+    pqxx::result r = w.exec(
         "SELECT symbol_id, position FROM positions WHERE client_id = $1",
-        client_id
+        pqxx::params{client_id}
     );
     std::map<uint32_t, int64_t> result;
     for (auto const& row : r) {
@@ -98,15 +101,22 @@ void PostgresClientDatabase::updatePosition(uint32_t client_id, uint32_t symbol_
     std::lock_guard<std::mutex> lock(mutex_);
     reconnect_if_needed();
     pqxx::work w(*conn_);
-    w.exec_params(
-        "INSERT INTO clients (client_id, username) VALUES ($1, $2) ON CONFLICT (client_id) DO NOTHING",
-        client_id, "client_" + std::to_string(client_id)
+    std::string username = "client_" + std::to_string(client_id);
+
+    w.exec(
+        "INSERT INTO clients (client_id, username) VALUES ($1, $2) "
+        "ON CONFLICT (client_id) DO NOTHING",
+        pqxx::params{client_id, username}
     );
+
     int64_t initial_pos = (symbol_id == 0) ? 1000000 : 0;
-    w.exec_params(
-        "INSERT INTO positions (client_id, symbol_id, position) VALUES ($1, $2, $3) "
-        "ON CONFLICT (client_id, symbol_id) DO UPDATE SET position = positions.position + $4",
-        client_id, symbol_id, initial_pos + delta, delta
+
+    w.exec(
+        "INSERT INTO positions (client_id, symbol_id, position) "
+        "VALUES ($1, $2, $3) "
+        "ON CONFLICT (client_id, symbol_id) "
+        "DO UPDATE SET position = positions.position + $4",
+        pqxx::params{client_id, symbol_id, initial_pos + delta, delta}
     );
     w.commit();
 }
@@ -124,16 +134,23 @@ void PostgresClientDatabase::addOrUpdateOpenOrder(uint32_t client_id, uint64_t o
     uint64_t qty = order_resp->q();
  
     pqxx::work w(*conn_);
-    w.exec_params(
-        "INSERT INTO clients (client_id, username) VALUES ($1, $2) ON CONFLICT (client_id) DO NOTHING",
-        client_id, "client_" + std::to_string(client_id)
+
+    std::string username = "client_" + std::to_string(client_id);
+
+    w.exec(
+        "INSERT INTO clients (client_id, username) "
+        "VALUES ($1, $2) "
+        "ON CONFLICT (client_id) DO NOTHING",
+        pqxx::params{client_id, username}
     );
-    w.exec_params(
-        "INSERT INTO open_orders (order_id, client_id, symbol_id, side, price_mantissa, qty, visible_qty, timestamp) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7, NOW()) "
-        "ON CONFLICT (order_id) DO UPDATE SET "
-        "price_mantissa = EXCLUDED.price_mantissa, qty = EXCLUDED.qty, visible_qty = EXCLUDED.visible_qty, updated_at = NOW()",
-        order_id, client_id, symbol_id, side, price, qty, qty
+
+    w.exec(
+        "INSERT INTO open_orders "
+        "(order_id, client_id, symbol_id, side, price_mantissa, qty, visible_qty, timestamp) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, NOW()) ON CONFLICT (order_id) DO UPDATE SET "
+        "price_mantissa = EXCLUDED.price_mantissa, "
+        "qty = EXCLUDED.qty, visible_qty = EXCLUDED.visible_qty, updated_at = NOW()",
+        pqxx::params{order_id, client_id, symbol_id, side, price, qty, qty}
     );
     w.commit();
 }
@@ -143,7 +160,7 @@ void PostgresClientDatabase::removeOpenOrder(uint32_t client_id, uint64_t order_
     std::lock_guard<std::mutex> lock(mutex_);
     reconnect_if_needed();
     pqxx::work w(*conn_);
-    w.exec_params("DELETE FROM open_orders WHERE order_id = $1", order_id);
+    w.exec("DELETE FROM open_orders WHERE order_id = $1", pqxx::params{order_id});
     w.commit();
 }
 
@@ -151,9 +168,9 @@ std::vector<std::vector<uint8_t>> PostgresClientDatabase::getOpenOrders(uint32_t
     std::lock_guard<std::mutex> lock(mutex_);
     reconnect_if_needed();
     pqxx::work w(*conn_);
-    pqxx::result r = w.exec_params(
+    pqxx::result r = w.exec(
         "SELECT order_id, symbol_id, side, price_mantissa, qty FROM open_orders WHERE client_id = $1",
-        client_id
+        pqxx::params{client_id}
     );
     std::vector<std::vector<uint8_t>> result;
     for (auto const& row : r) {

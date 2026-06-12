@@ -24,7 +24,7 @@ int main()
     try {
         auto conn = Exchange::DbUtil::getDbConnection();
         pqxx::work w(*conn);
-        pqxx::result r = w.exec_params(
+        pqxx::result r = w.exec(
             "SELECT min_step_raw, min_price_raw, max_price_raw FROM symbols WHERE symbol_id = 1"
         );
         if (!r.empty()) {

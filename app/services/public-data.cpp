@@ -59,9 +59,9 @@ net::awaitable<void> do_session(tcp::socket socket) {
                         uint32_t symbol_id = std::stoul(id_str);
                         auto conn = Exchange::DbUtil::getDbConnection();
                         pqxx::work w(*conn);
-                        pqxx::result r = w.exec_params(
+                        pqxx::result r = w.exec(
                             "SELECT name, p_exp, min_step_raw, min_price_raw, max_price_raw FROM symbols WHERE symbol_id = $1",
-                            symbol_id
+                            pqxx::params{symbol_id}
                         );
                         if (!r.empty()) {
                             auto name = r[0][0].as<std::string>();
