@@ -153,6 +153,8 @@ The `lat-tracer` eBPF program measures end-to-end latency of order requests by h
 
 ### Latency Tracing Workflow
 
+#### 1. Recording starting time (tcp_recvmsg)
+
 ```mermaid
 sequenceDiagram
     participant Kernel as tcp_recvmsg<br/>(Kernel)
@@ -169,6 +171,7 @@ sequenceDiagram
 ```
 
 #### 2. Client Manager Processing
+
 ```mermaid
 sequenceDiagram
     participant CM as Client Manager<br/>(User Space)
@@ -189,6 +192,7 @@ sequenceDiagram
 ```
 
 #### 3. Matching Engine Processing
+
 ```mermaid
 sequenceDiagram
     participant OB as Matching Engine<br/>(User Space)
@@ -207,6 +211,7 @@ sequenceDiagram
 ```
 
 #### 4. TX Path & Userspace Aggregation (tcp_sendmsg)
+
 ```mermaid
 sequenceDiagram
     participant Kernel as tcp_sendmsg<br/>(Kernel)
@@ -246,12 +251,3 @@ sequenceDiagram
 1. **Setup**: Loads the eBPF object, attaches kprobes and uprobes, and sets up the Ring Buffer.
 2. **Processing**: Polls the Ring Buffer for `latency_event` structures.
 3. **Analytics & Display**: Calculates the pure kernel networking overhead by subtracting application latencies from the total latency. Aggregates data by execution type (New, Modify, Cancel) and calculates percentiles (p50, p90, p99, p999), printing a real-time table to standard output.
-
-
-## For Agent
-
-### Version control
-
-- Don't push to remote unless I told you to explicitly.
-- When requested pushing, make multiple commit depending on the change, seperate different functionalities into different commits.
-
