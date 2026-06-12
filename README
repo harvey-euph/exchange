@@ -147,57 +147,97 @@ L3 Update:    Same as L2
 
     RB: L3_UPDATE_RING
 
-## eBPF Monitoring (ws_monitor)
+## eBPF Latency Tracer (lat-tracer)
 
-The `ws_monitor` eBPF program hooks into `tcp_recvmsg` and `tcp_sendmsg` to monitor the throughput and payloads of WebSocket connections.
+The `lat-tracer` eBPF program measures end-to-end latency of order requests by hooking into kernel networking functions and user-space application functions (uprobes). It breaks down the total latency into Kernel Network Overhead, Client Manager Processing, and Matching Engine Processing.
 
-### tcp_recvmsg Monitor Workflow
-
-Since `tcp_recvmsg` is responsible for receiving TCP payloads, the eBPF program hooks both the entry (`kprobe`) and exit (`kretprobe`) points to correlate the connection metadata and the actual data received.
+### Latency Tracing Workflow
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User as User Space App
-    participant Kernel as Kernel (tcp_recvmsg)
-    participant Kprobe as kprobe/tcp_recvmsg
-    participant Map as BPF Map (recv_ctx_map)
-    participant Kretprobe as kretprobe/tcp_recvmsg
-    participant RB as BPF Ringbuf (rb)
+    actor Client as Network / Client
+    participant Kernel as Kernel (tcp_recvmsg / sendmsg)
+    participant BPF as eBPF Maps
+    participant CM as Client Manager
+    participant OB as Matching Engine (OrderBook)
+    participant RB as BPF RingBuffer
+    participant Tracer as lat-tracer (User Space)
 
-    User->>Kernel: Call recv() / read()
+    Client->>Kernel: Incoming Order Packet (recvmsg)
     activate Kernel
-    Kernel->>Kprobe: Trigger Hook (Entry)
-    activate Kprobe
-    Note over Kprobe: Read sk pointer &<br/>Buffer Address (msg_iter)
-    Kprobe->>Map: Save context (TID -> rctx)
-    deactivate Kprobe
-    
-    Note over Kernel: Kernel retrieves network data<br/>and copies it to User Buffer
-    
-    Kernel->>Kretprobe: Trigger Hook (Exit / Return)
-    activate Kretprobe
-    Note over Kretprobe: Get return value (ret = bytes read)
-    Kretprobe->>Map: Lookup context by TID
-    Map-->>Kretprobe: Return rctx (sk, Buffer Address)
-    Kretprobe->>Map: Delete entry (Prevent memory leak)
-    
-    alt ret > 0 (Success)
-        Note over Kretprobe: Read copied payload from User Buffer
-        Kretprobe->>RB: Submit event_data (sk, payload, len)
-    end
-    deactivate Kretprobe
-    Kernel-->>User: Return bytes read (ret)
+    Note over Kernel: [kprobe] tcp_recvmsg
+    Kernel->>BPF: Save socket & buf ctx (recv_ctx_map, key: TID)
+    Note over Kernel: [kretprobe] tcp_recvmsg
+    Kernel->>BPF: Read & Delete recv_ctx_map[TID]<br/>Extract exec_id
+    Kernel->>BPF: Save Start Time T0 (pending_requests, key: exec_id)
+    Kernel-->>CM: Deliver Payload
     deactivate Kernel
+
+    activate CM
+    Note over CM: [uprobe] process_client_request<br/>Extract exec_id
+    CM->>BPF: Save CM Start Time (manager_start_map, key: exec_id)
+    CM-->>OB: Enqueue to Request Ring Buffer
+    deactivate CM
+    
+    activate OB
+    Note over OB: [uprobe] processRequest<br/>Extract exec_id
+    OB->>BPF: Save Engine Start Time (engine_start_map, key: exec_id)
+    OB->>BPF: Associate TID to exec_id (active_exec_id_map, key: TID)
+    Note over OB: Matching Logic
+    Note over OB: [uretprobe] processRequest
+    OB->>BPF: Read & Delete active_exec_id_map[TID] -> exec_id
+    OB->>BPF: Read & Delete engine_start_map[exec_id] -> Start Time
+    OB->>BPF: Save Engine Latency (engine_lat_map, key: exec_id)
+    OB-->>CM: Enqueue to Response Ring Buffer
+    deactivate OB
+    
+    activate CM
+    Note over CM: [uprobe] handle_execution_response<br/>Extract exec_id
+    CM->>BPF: Associate TID to exec_id (active_exec_id_map, key: TID)
+    Note over CM: Response Logic
+    Note over CM: [uretprobe] handle_execution_response
+    CM->>BPF: Read & Delete active_exec_id_map[TID] -> exec_id
+    CM->>BPF: Read & Delete manager_start_map[exec_id] -> Start Time
+    CM->>BPF: Save CM Latency (manager_lat_map, key: exec_id)
+    CM->>Kernel: send() / write()
+    deactivate CM
+    
+    activate Kernel
+    Note over Kernel: [kprobe] tcp_sendmsg<br/>Extract exec_id
+    Kernel->>BPF: Read T0 (pending_requests[exec_id])
+    Kernel->>BPF: Read Engine Latency (engine_lat_map[exec_id])
+    Kernel->>BPF: Read CM Latency (manager_lat_map[exec_id])
+    Note over Kernel: Calculate Total Latency
+    Kernel->>RB: Submit latency_event
+    Kernel->>BPF: Delete map entries for exec_id
+    Kernel-->>Client: Outgoing Response Packet
+    deactivate Kernel
+    
+    RB-->>Tracer: Poll event
+    activate Tracer
+    Note over Tracer: Calculate Kernel Overhead<br/>(Total - Engine - CM)
+    Note over Tracer: Update Stats & Print Table
+    deactivate Tracer
 ```
 
-#### Why hook both entry and exit?
+#### Responsibilities
 
-1. **At Entry (`kprobe/tcp_recvmsg`)**:
-   We can access the arguments passed to the function: the socket pointer (`sk`) and the user-space buffer metadata (`msg_iter`). However, at this point, the kernel has not yet copied the incoming network bytes into the user-space buffer, and we do not know how many bytes will be successfully read.
+**Kernel Space (eBPF)**:
+1. **Network Hooks**: Intercepts `tcp_recvmsg` (entry/exit) to parse incoming FlatBuffer payloads for `exec_id` and records the start timestamp. Intercepts `tcp_sendmsg` to parse outgoing responses and compute total latency.
+2. **Application Hooks (Uprobes)**: Attaches to C++ functions in `ClientManager` and `OrderBook`. Computes the time spent inside the Matching Engine and the Client Manager.
+3. **Data Aggregation**: Retrieves the latency components when the response is sent out, bundles them into a `latency_event`, and pushes them to User Space.
 
-2. **At Exit (`kretprobe/tcp_recvmsg`)**:
-   We get the function's return value (actual bytes read, `ret`), and the network data has now been written to the user-space buffer. However, the original function arguments (like `sk` and the buffer metadata) are no longer accessible because the register/stack values have been overwritten.
+**User Space (C++)**:
+1. **Setup**: Loads the eBPF object, attaches kprobes and uprobes, and sets up the Ring Buffer.
+2. **Processing**: Polls the Ring Buffer for `latency_event` structures.
+3. **Analytics & Display**: Calculates the pure kernel networking overhead by subtracting application latencies from the total latency. Aggregates data by execution type (New, Modify, Cancel) and calculates percentiles (p50, p90, p99, p999), printing a real-time table to standard output.
 
-3. **Collaboration**:
-   We save the context (socket and buffer descriptors) at the entry point into a thread-local BPF map (`recv_ctx_map`) keyed by Thread ID. Upon function exit, we look up the context using the current Thread ID, read the newly written data from the user buffer, clean up the map entry to prevent leaks, and submit the event data containing the socket ID, timestamp, length, and payload to userspace via the BPF Ring Buffer (`rb`).
+
+## For Agent
+
+### Version control
+
+- Don't push to remote unless I told you to explicitly.
+- When requested pushing, make multiple commit depending on the change, seperate different functionalities into different commits.
+
