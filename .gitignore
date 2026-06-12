@@ -25,3 +25,6 @@ web/dist-ssr
 web/*.local
 web/src/fbs
 web/.build_done
+
+# Environment Variables
+.env
