@@ -73,6 +73,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1024);
     __type(key, uint32_t); // tid
+    __type(value, uint64_t); // exec_id
 } active_exec_id_map SEC(".maps");
 
 struct tx_ctx {
