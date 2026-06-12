@@ -4,6 +4,53 @@ This manual documents the transition from an in-memory client database to Postgr
 
 ---
 
+
+## 0. Schema Diagram (Conceptual)
+
+```mermaid
+erDiagram
+    SYMBOLS {
+        integer symbol_id PK
+        varchar name UK
+        smallint p_exp
+        bigint min_step_raw
+        bigint min_price_raw
+        bigint max_price_raw
+    }
+    CLIENTS {
+        integer client_id PK
+        varchar username UK
+    }
+    POSITIONS {
+        integer client_id PK, FK
+        integer symbol_id PK, FK
+        bigint position
+    }
+    OPEN_ORDERS {
+        bigint order_id PK
+        integer client_id FK
+        integer symbol_id FK
+        smallint side
+        bigint price_mantissa
+        bigint qty
+        bigint visible_qty
+        timestamp timestamp
+    }
+    PENDING_RESPONSES {
+        bigint response_id PK
+        integer client_id FK
+        bigint exec_id
+        bytea serialized_data
+        timestamp created_at
+    }
+
+    CLIENTS ||--o{ POSITIONS : has
+    SYMBOLS ||--o{ POSITIONS : has
+    CLIENTS ||--o{ OPEN_ORDERS : places
+    SYMBOLS ||--o{ OPEN_ORDERS : targets
+    CLIENTS ||--o{ PENDING_RESPONSES : receives
+```
+
 ## 1. Prerequisites & Installation
 
 To run the PostgreSQL database and build the C++ PostgreSQL client library (`libpqxx`), you need to install the database server, development headers, and the C++ driver.
