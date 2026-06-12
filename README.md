@@ -55,7 +55,7 @@ sequenceDiagram
     CM->>Client: 4. Send Ready Frame (OrderResponse, ExecType=Complete)
     deactivate CM
 
-    Note over Client: CRITICAL: Client MUST receive Ready Frame<br/>(ExecType=Complete) before sending any OrderRequest!
+    Note over Client: CRITICAL: Client MUST send an OrderRequest<br/>after Ready Frame (ExecType=Complete) arrived!
 ```
 
 ## Order & Market Data flow
@@ -112,45 +112,6 @@ sequenceDiagram
     
     deactivate Pub
 ```
-
-## Data Flow and Client Protocol
-
-    ---H> Send through HTTP Channel
-    --WS> Send through WebSocket Channel
-    --RB> Send through Ring Buffer
-
-OrderRequest: Client ---H> HTTP Server --RB> ORDERBOOK_CORE
-    
-    OrderRequest in flatbuffers format
-
-PreAcked:     HTTP Server ---H> Client
-
-    Only inform Client that HTTP server received OrderRequest, futher information will be sent as Executions from CLIENT_MANAGEMENT.
-
-Executions:   ORDERBOOK_CORE --RB> CLIENT_MANAGEMENT 
-                             --WS> Client + ---> DB(Status=SENT)      (if Client loged in)
-                             ----> DB(Status=PENDING)                 (if Client loged out)
-    
-    Connection built -> Client log in -> Check and send cached Executions -> accept request
-    Acceptable Request: 1. OrderRequest in flatbuffers format
-                        2. Current position and Cash
-                        3. Current Pending Order Status
-                        (Use union format flatbuffers, TODO)
-
-L2 Update:    ORDERBOOK_CORE --RB> L2_PUBLISHER --WS> Client
-
-    Connection built -> Accepting Request
-    Acceptable Request: 1. Subscription -> receive SNAPSHOT -> receive INCREMENTALS
-                        2. Unsubscription
-                        3. Resend Subscription will be consider identically as the first time and send SNAPSHOT, in case client lost.
-
-    SNAPSHOT: Empty frame ahead, same sturcture as INCREMENTALS
-    Empty frame: Side=None
-    RB: L2_UPDATE_RING
-
-L3 Update:    Same as L2
-
-    RB: L3_UPDATE_RING
 
 ## eBPF Latency Tracer (lat-tracer)
 
