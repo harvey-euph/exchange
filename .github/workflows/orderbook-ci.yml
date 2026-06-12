@@ -55,27 +55,4 @@ jobs:
           make clean
           make test
 
-  quick-test:
-    name: Quick Test (ubuntu-latest)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            g++ \
-            libgtest-dev \
-            googletest \
-            libboost-all-dev \
-            libflatbuffers-dev \
-            flatbuffers-compiler \
-            libpq-dev \
-            libpqxx-dev
-
-      - name: Generate FlatBuffers & Run Tests
-        run: |
-          make clean
-          make test
