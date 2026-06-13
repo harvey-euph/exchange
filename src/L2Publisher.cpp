@@ -1,5 +1,6 @@
 #include "L2Publisher.hpp"
 #include <iostream>
+#include "AsyncLogger.hpp"
 
 namespace Exchange {
 
@@ -37,7 +38,7 @@ L2Publisher::L2Publisher(int port, SHMRingBuffer* ring_buffer)
                 client->send(fbb.GetBufferPointer(), fbb.GetSize());
             }
         }
-        std::cout << "[L2Publisher] Sent snapshot for symbol " << symbol_id << " to new subscriber." << std::endl;
+        LOG("[L2Publisher] Sent snapshot for symbol " << symbol_id << " to new subscriber.");
     };
 
     ws_adaptor_->set_subscribe_handler(subscribe_handler);

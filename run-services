@@ -65,11 +65,12 @@ get_run_cmd() {
             "l3-publisher")    main_core="4" ;;
             "http-accepter")   main_core="5" ;;
             "public-data")     main_core="6" ;;
+            "logger")          main_core="7" ;;
         esac
         if [ -n "$main_core" ]; then
             echo "sudo MAIN_CORE=$main_core nice -n -20 $exe_path"
         else
-            echo "$exe_path"
+            echo "sudo $exe_path"
         fi
     else
         # Tier 3: Full Isolation. Set MAIN_CORE and BG_CORE env vars, use chrt -f 99 (RT)
@@ -82,6 +83,7 @@ get_run_cmd() {
             "l3-publisher")    main_core="4"; bg_core="20" ;;
             "http-accepter")   main_core="5"; bg_core="21" ;;
             "public-data")     main_core="6"; bg_core="22" ;;
+            "logger")          main_core="7"; bg_core="23" ;;
         esac
         
         local env_vars=""
@@ -95,7 +97,7 @@ get_run_cmd() {
         if [ -n "$env_vars" ]; then
             echo "sudo $env_vars chrt -f 99 $exe_path"
         else
-            echo "$exe_path"
+            echo "sudo $exe_path"
         fi
     fi
 }

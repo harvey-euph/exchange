@@ -1,5 +1,6 @@
 #include "L3Publisher.hpp"
 #include <iostream>
+#include "AsyncLogger.hpp"
 
 namespace Exchange {
 
@@ -45,7 +46,7 @@ L3Publisher::L3Publisher(int port, SHMRingBuffer* ring_buffer)
                 }
             }
         }
-        std::cout << "[L3Publisher] Sent snapshot (" << book->orders.size() << " orders) for symbol " << symbol_id << " to new subscriber." << std::endl;
+        LOG("[L3Publisher] Sent snapshot (" << book->orders.size() << " orders) for symbol " << symbol_id << " to new subscriber.");
     };
 
     ws_adaptor_->set_subscribe_handler(subscribe_handler);

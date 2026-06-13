@@ -15,6 +15,7 @@ sudo rm -f /dev/shm/ORDER_REQUEST \
         /dev/shm/ORDER_RESPONSE \
         /dev/shm/L2_UPDATE_RING \
         /dev/shm/L3_UPDATE_RING \
+        /dev/shm/LOG_RING_* \
         /dev/shm/EXCHANGE_TELEMETRY \
         /dev/shm/*TELEMETRY 2>/dev/null || true
 

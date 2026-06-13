@@ -1,5 +1,6 @@
 #include "WSAdaptor.hpp"
 #include "ThreadUtil.hpp"
+#include "AsyncLogger.hpp"
 #include <cstdlib>
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
@@ -91,7 +92,7 @@ public:
             ws_.binary(true);
 
             co_await ws_.async_accept(net::use_awaitable);
-            std::cout << "[WSSession] WebSocket Handshake successful for " << remote_info_ << std::endl;
+            LOG("[WSSession] WebSocket Handshake successful for " << remote_info_);
 
             // Spawn read loop
             net::co_spawn(ws_.get_executor(), read_loop(), net::detached);
@@ -144,7 +145,7 @@ public:
                 }
             }
         } catch (std::exception const& e) {
-            std::cout << "[WSSession] Read loop ending for " << remote_info_ << " (" << e.what() << ")" << std::endl;
+            LOG("[WSSession] Read loop ending for " << remote_info_ << " (" << e.what() << ")");
             on_close();
         }
     }
@@ -226,7 +227,7 @@ public:
         if (ec) {
             std::cerr << "[WSListener] Failed to listen on " << endpoint << ": " << ec.message() << std::endl;
         } else {
-            std::cout << "[WSListener] Listening on " << endpoint << std::endl;
+            LOG("[WSListener] Listening on " << endpoint);
         }
     }
 
@@ -251,7 +252,7 @@ public:
                 socket.set_option(tcp::no_delay(true), ec_nodelay);
                 
                 auto session = std::make_shared<WSSession>(std::move(socket), sub_handler_, msg_handler_, close_handler_);
-                std::cout << "[WSListener] Accepted new connection. Starting session..." << std::endl;
+                LOG("[WSListener] Accepted new connection. Starting session...");
                 {
                     std::lock_guard<std::mutex> lock(session_mutex_);
                     sessions_.insert(session);

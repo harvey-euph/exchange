@@ -1,6 +1,7 @@
 #include "ClientManager.hpp"
 #include "LogUtil.hpp"
 #include "TimeUtil.hpp"
+#include "AsyncLogger.hpp"
 #include <iostream>
 #include <algorithm>
 
@@ -12,19 +13,19 @@ ClientManager::ClientManager(int port, SHMRingBuffer* request_ring, SHMRingBuffe
     , response_ring_(response_ring)
     , db_(db)
 {
-    std::cout << "[ClientManager] Initializing on port " << port << std::endl;
+    LOG("[ClientManager] Initializing on port " << port);
 
     auto subscribe_handler = [this](WSClientPtr client, uint32_t client_id, bool is_subscribe)
     {
         std::lock_guard<std::mutex> sessions_guard(sessions_mutex_);
         if (is_subscribe) {
             client_sessions_[client_id].push_back(client);
-            std::cout << "[ClientManager] Client " << client_id << " connected (sessions: " 
-                      << client_sessions_[client_id].size() << ")." << std::endl;
+            LOG("[ClientManager] Client " << client_id << " connected (sessions: " 
+                      << client_sessions_[client_id].size() << ").");
             
             // 1. Send pending executions (OrderResponse)
             auto pending = db_->popPendingResponses(client_id);
-            std::cout << "[ClientManager] Sending " << pending.size() << " pending responses." << std::endl;
+            LOG("[ClientManager] Sending " << pending.size() << " pending responses.");
             for (auto& resp : pending) {
                 client->send(resp.data.data(), resp.data.size());
                 auto client_resp = flatbuffers::GetRoot<ClientResponse>(resp.data.data());
@@ -35,7 +36,7 @@ ClientManager::ClientManager(int port, SHMRingBuffer* request_ring, SHMRingBuffe
 
             // 2. Send current open order as OrderResponse with ExecType=OrderStatus
             auto open_orders = db_->getOpenOrders(client_id);
-            std::cout << "[ClientManager] Sending " << open_orders.size() << " open orders." << std::endl;
+            LOG("[ClientManager] Sending " << open_orders.size() << " open orders.");
             for (auto& order_data : open_orders) {
                 client->send(order_data.data(), order_data.size());
                 auto client_resp = flatbuffers::GetRoot<ClientResponse>(order_data.data());
@@ -46,7 +47,7 @@ ClientManager::ClientManager(int port, SHMRingBuffer* request_ring, SHMRingBuffe
 
             // 3. Send current positions for all non-zero asset and cash(symbol_id=0)
             auto positions = db_->getAllPositions(client_id);
-            std::cout << "[ClientManager] Sending positions for " << positions.size() << " symbols." << std::endl;
+            LOG("[ClientManager] Sending positions for " << positions.size() << " symbols.");
             for (auto const& [sym, pos] : positions) {
                 if (pos != 0 || sym == 0) {
                     flatbuffers::FlatBufferBuilder fbb(128);
@@ -70,7 +71,7 @@ ClientManager::ClientManager(int port, SHMRingBuffer* request_ring, SHMRingBuffe
             auto ready_resp_ptr = flatbuffers::GetRoot<ClientResponse>(fbb.GetBufferPointer())->data_as_OrderResponse();
             logOrderResponse(ready_resp_ptr, "[ClientManager] Mgmt Ready:");
 
-            std::cout << "[ClientManager] Client " << client_id << " session ready (Mgmt Ready)." << std::endl;
+            LOG("[ClientManager] Client " << client_id << " session ready (Mgmt Ready).");
         } else {
             auto it = client_sessions_.find(client_id);
             if (it != client_sessions_.end()) {
@@ -81,7 +82,7 @@ ClientManager::ClientManager(int port, SHMRingBuffer* request_ring, SHMRingBuffe
                 }
             }
             client->is_ready.store(false, std::memory_order_release);
-            std::cout << "[ClientManager] Client " << client_id << " disconnected." << std::endl;
+            LOG("[ClientManager] Client " << client_id << " disconnected.");
         }
     };
     
@@ -94,8 +95,8 @@ ClientManager::ClientManager(int port, SHMRingBuffer* request_ring, SHMRingBuffe
             
             if (sessions.size() < original_size) {
                 uint32_t client_id = it->first;
-                std::cout << "[ClientManager] Session break detected for client " << client_id 
-                << ". Treating as automatic logout." << std::endl;
+                LOG("[ClientManager] Session break detected for client " << client_id 
+                << ". Treating as automatic logout.");
                 
                 if (sessions.empty()) {
                     it = client_sessions_.erase(it);
@@ -115,7 +116,7 @@ ClientManager::ClientManager(int port, SHMRingBuffer* request_ring, SHMRingBuffe
     ws_adaptor_->set_close_handler(close_handler);
     ws_adaptor_->set_message_handler(message_handler);
     
-    std::cout << "[ClientManager] WS Handlers registered." << std::endl;
+    LOG("[ClientManager] WS Handlers registered.");
 }
 
 void ClientManager::process_client_request(WSClientPtr client, const void* data, size_t size)

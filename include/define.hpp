@@ -6,12 +6,19 @@
 #define ORDER_RESPONSE "ORDER_RESPONSE"
 #define L2_UPDATE_RING "L2_UPDATE_RING"
 #define L3_UPDATE_RING "L3_UPDATE_RING"
+#define LOG_RING_CM "LOG_RING_CM"
+#define LOG_RING_ME "LOG_RING_ME"
+#define LOG_RING_L2 "LOG_RING_L2"
+#define LOG_RING_L3 "LOG_RING_L3"
+#define LOG_RING_HTTP "LOG_RING_HTTP"
+#define LOG_RING_PD "LOG_RING_PD"
 // #define EXCHANGE_TELEMETRY "EXCHANGE_TELEMETRY"
 
 #define ORDER_REQUEST_SIZE  65536
 #define ORDER_RESPONSE_SIZE 131072
 #define L2_UPDATE_RING_SIZE 65536
 #define L3_UPDATE_RING_SIZE 131072
+#define LOG_RING_SIZE 262144
 
 // Unified sleep duration in milliseconds for dev/test environment polling loops
 #define POLL_SLEEP_MS 1

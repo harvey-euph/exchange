@@ -21,6 +21,7 @@ inline int get_env_core(const char* env_name, int fallback_val) {
     #define L3_MAIN_CORE          4 // Priority 3 (L3 Publisher)
     #define HTTP_MAIN_CORE        5 // Priority 4 (HTTP Accepter)
     #define PUBLIC_DATA_MAIN_CORE 6 // Priority 5 (Public Data HTTP Server)
+    #define LOGGER_MAIN_CORE      7 // Priority 6 (Logger)
 
 #elif defined(AFFINITY_PROFILE_COMPACT)
     // Compact Core Profile (>= 4 cores total: core 0 for OS, cores 1-2 isolated, core 3 shared)
@@ -31,6 +32,7 @@ inline int get_env_core(const char* env_name, int fallback_val) {
     #define L3_MAIN_CORE          3 // Priority 3 (Shared)
     #define HTTP_MAIN_CORE        3 // Priority 4 (Shared)
     #define PUBLIC_DATA_MAIN_CORE 3 // Priority 5 (Shared)
+    #define LOGGER_MAIN_CORE      3 // Priority 6 (Shared)
 
 #elif defined(AFFINITY_PROFILE_SHARED)
     // Shared Cores Profile (>= 2 cores total: core 0 shared, core 1 dedicated to ME)
@@ -41,6 +43,7 @@ inline int get_env_core(const char* env_name, int fallback_val) {
     #define L3_MAIN_CORE          0 // Priority 3 (Shared on Core 0)
     #define HTTP_MAIN_CORE        0 // Priority 4 (Shared on Core 0)
     #define PUBLIC_DATA_MAIN_CORE 0 // Priority 5 (Shared on Core 0)
+    #define LOGGER_MAIN_CORE      0 // Priority 6 (Shared on Core 0)
 
 #else
     // Default Dynamic Profile: reads from environment variables MAIN_CORE
@@ -50,5 +53,6 @@ inline int get_env_core(const char* env_name, int fallback_val) {
     #define L3_MAIN_CORE          get_env_core("MAIN_CORE", -1)
     #define HTTP_MAIN_CORE        get_env_core("MAIN_CORE", -1)
     #define PUBLIC_DATA_MAIN_CORE get_env_core("MAIN_CORE", -1)
+    #define LOGGER_MAIN_CORE      get_env_core("MAIN_CORE", -1)
 
 #endif

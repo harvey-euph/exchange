@@ -2,11 +2,13 @@
 #include "ThreadUtil.hpp"
 #include "AffinityConfig.hpp"
 #include "SignalHandler.hpp"
+#include "AsyncLogger.hpp"
 #include <iostream>
 
 int main() 
 {
     setup_signals();
+    Exchange::AsyncLogger::get().init(LOG_RING_L3);
 
     std::cout << "[L3Publisher] Connecting to SHMRingBuffer: " << L3_UPDATE_RING << "..." << std::endl;
 

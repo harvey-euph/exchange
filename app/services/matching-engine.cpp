@@ -3,12 +3,14 @@
 #include "ThreadUtil.hpp"
 #include "AffinityConfig.hpp"
 #include "SignalHandler.hpp"
+#include "AsyncLogger.hpp"
 #include <iostream>
 
 
 int main()
 {
     setup_signals();
+    Exchange::AsyncLogger::get().init(LOG_RING_ME);
 
     int main_core = ME_MAIN_CORE;
     if (main_core >= 0) {
