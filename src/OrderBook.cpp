@@ -230,6 +230,7 @@ void OrderBook::handleModifyOrder(const OrderRequest* req)
 
     if (pl == target) {
         if (!qty_diff) {
+            sendResponse(ExecType_Replaced, req->order_id(), req->client_id(), req->exec_id(), req->side(), req->p(), req->q());
             return;
         }
 
