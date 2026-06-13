@@ -92,45 +92,11 @@ void AlgoTradingClient::send_order_request(OrderRequestT& order) {
         std::chrono::system_clock::now().time_since_epoch()
     ).count();
 
-    if (config_.use_http) {
-        try {
-            net::io_context ioc;
-            tcp::resolver resolver(ioc);
-            beast::tcp_stream stream(ioc);
-
-            auto const results = resolver.resolve(config_.host, config_.http_port);
-            stream.connect(results);
-
-            flatbuffers::FlatBufferBuilder fbb(256);
-            auto order_offset = OrderRequest::Pack(fbb, &order);
-            fbb.Finish(order_offset);
-
-            http::request<http::vector_body<char>> req{http::verb::post, "/order", 11};
-            req.set(http::field::host, config_.host);
-            req.set(http::field::content_type, "application/octet-stream");
-            
-            auto const* data = reinterpret_cast<const char*>(fbb.GetBufferPointer());
-            req.body().assign(data, data + fbb.GetSize());
-            req.prepare_payload();
-
-            http::write(stream, req);
-
-            beast::flat_buffer buffer;
-            http::response<http::string_body> res;
-            http::read(stream, buffer, res);
-
-            beast::error_code ec;
-            stream.socket().shutdown(tcp::socket::shutdown_both, ec);
-        } catch (std::exception const& e) {
-            std::cerr << "[AlgoTradingClient] HTTP Request error: " << e.what() << std::endl;
-        }
-    } else {
-        flatbuffers::FlatBufferBuilder fbb(256);
-        auto order_offset = OrderRequest::Pack(fbb, &order);
-        auto client_req = CreateClientRequest(fbb, ClientRequestData_OrderRequest, order_offset.Union());
-        fbb.Finish(client_req);
-        mgmt_client_->send(fbb.GetBufferPointer(), fbb.GetSize());
-    }
+    flatbuffers::FlatBufferBuilder fbb(256);
+    auto order_offset = OrderRequest::Pack(fbb, &order);
+    auto client_req = CreateClientRequest(fbb, ClientRequestData_OrderRequest, order_offset.Union());
+    fbb.Finish(client_req);
+    mgmt_client_->send(fbb.GetBufferPointer(), fbb.GetSize());
 }
 
 void AlgoTradingClient::query_position(uint32_t symbol_id) {

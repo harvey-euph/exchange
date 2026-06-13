@@ -32,6 +32,7 @@ SRC_DIR := src
 SERVICE_DIR := app/services
 AGENT_DIR := app/client-agents
 EXAMPLE_DIR := app/client-examples
+CLIENT_PERF_DIR := app/client-perf
 TEST_DIR := tests
 FBS_DIR := fbs
 FBS_OUT := include/fbs
@@ -77,6 +78,13 @@ EXAMPLE_SOURCES := $(wildcard $(EXAMPLE_DIR)/*.cpp)
 EXAMPLE_TARGETS := $(patsubst $(EXAMPLE_DIR)/%.cpp,$(BUILD_DIR)/client-examples/%,$(EXAMPLE_SOURCES))
 
 # -----------------------------------------------------------------------------
+# Client Perf Executables
+# -----------------------------------------------------------------------------
+
+CLIENT_PERF_SOURCES := $(wildcard $(CLIENT_PERF_DIR)/*.cpp)
+CLIENT_PERF_TARGETS := $(patsubst $(CLIENT_PERF_DIR)/%.cpp,$(BUILD_DIR)/client-perf/%,$(CLIENT_PERF_SOURCES))
+
+# -----------------------------------------------------------------------------
 # Observability Executables
 # -----------------------------------------------------------------------------
 
@@ -100,7 +108,7 @@ TEST_TARGETS := $(patsubst $(TEST_DIR)/%.cpp,$(BUILD_DIR)/tests/%,$(TEST_SOURCES
 WEB_DIR := web
 
 .PHONY: all
-all: $(FBS_GENERATED) $(SERVICE_TARGETS) $(AGENT_TARGETS) $(EXAMPLE_TARGETS) $(OBS_TARGETS) ebpf web_target
+all: $(FBS_GENERATED) $(SERVICE_TARGETS) $(AGENT_TARGETS) $(EXAMPLE_TARGETS) $(CLIENT_PERF_TARGETS) $(OBS_TARGETS) ebpf web_target
 
 .PHONY: fbs
 fbs: $(FBS_GENERATED)
@@ -127,7 +135,7 @@ $(BUILD_DIR)/services/%: $(SERVICE_DIR)/%.cpp $(SRC_OBJECTS) $(FBS_GENERATED)
 
 $(BUILD_DIR)/client-agents/%: $(AGENT_DIR)/%.cpp $(SRC_OBJECTS) $(FBS_GENERATED)
 	@mkdir -p $(BUILD_DIR)/client-agents
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $< $(SRC_OBJECTS) $(LDLIBS) -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $< $(filter-out $(BUILD_DIR)/PostgresClientDatabase.o $(BUILD_DIR)/ClientManager.o,$(SRC_OBJECTS)) $(TEST_LDLIBS) -o $@
 
 # -----------------------------------------------------------------------------
 # Build Examples
@@ -135,7 +143,15 @@ $(BUILD_DIR)/client-agents/%: $(AGENT_DIR)/%.cpp $(SRC_OBJECTS) $(FBS_GENERATED)
 
 $(BUILD_DIR)/client-examples/%: $(EXAMPLE_DIR)/%.cpp $(SRC_OBJECTS) $(FBS_GENERATED)
 	@mkdir -p $(BUILD_DIR)/client-examples
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $< $(SRC_OBJECTS) $(LDLIBS) -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $< $(filter-out $(BUILD_DIR)/PostgresClientDatabase.o $(BUILD_DIR)/ClientManager.o,$(SRC_OBJECTS)) $(TEST_LDLIBS) -o $@
+
+# -----------------------------------------------------------------------------
+# Build Client Perf
+# -----------------------------------------------------------------------------
+
+$(BUILD_DIR)/client-perf/%: $(CLIENT_PERF_DIR)/%.cpp $(SRC_OBJECTS) $(FBS_GENERATED)
+	@mkdir -p $(BUILD_DIR)/client-perf
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $< $(filter-out $(BUILD_DIR)/PostgresClientDatabase.o $(BUILD_DIR)/ClientManager.o,$(SRC_OBJECTS)) $(TEST_LDLIBS) -o $@
 
 # -----------------------------------------------------------------------------
 # Build Observabilities

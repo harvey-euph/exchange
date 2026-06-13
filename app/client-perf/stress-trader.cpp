@@ -23,21 +23,8 @@ volatile sig_atomic_t g_stop = 0;
 
 class StressTrader : public AlgoTradingClient {
 public:
-    StressTrader(const Config& config, bool is_latency_mode) : AlgoTradingClient(config), is_latency_mode_(is_latency_mode) 
+    StressTrader(const Config& config) : AlgoTradingClient(config) 
     {
-        if (is_latency_mode_) {
-            double limit_us = 500.0;
-            std::ifstream ifs("docs/limit.md");
-            if (ifs.is_open()) {
-                std::string line;
-                while (std::getline(ifs, line)) {
-                    if (line.find("limit_interval_us=") != std::string::npos) {
-                        limit_us = std::stod(line.substr(18));
-                    }
-                }
-            }
-            current_interval_us_ = limit_us * 2.0;
-        }
 
         // Check step progression and unresponsiveness frequently (every 100ms)
         config_.timer_interval_ms = 100;
@@ -138,14 +125,6 @@ public:
                 if (rtt_us > step_max_rtt_us_) {
                     step_max_rtt_us_ = rtt_us;
                 }
-                if (is_latency_mode_) {
-                    if (exec == ExecType_New) rtt_new_.push_back(rtt_us);
-                    else if (exec == ExecType_Replaced) {
-                        if (is_short_mod) rtt_mod_short_.push_back(rtt_us);
-                        else rtt_mod_long_.push_back(rtt_us);
-                    }
-                    else if (exec == ExecType_Cancelled) rtt_can_.push_back(rtt_us);
-                }
             }
         }
     }
@@ -170,18 +149,16 @@ public:
         if (g_stop) {
             std::string reason = "User Interrupted (Ctrl+C)";
             std::cout << "Stress test terminated by user. Reason: " << reason << ". Writing limit and exiting...\n";
-            if (!is_latency_mode_) {
-                std::ofstream ofs("docs/limit.md");
-                ofs << "limit_interval_us=" << current_interval_us_.load() << "\n";
-                ofs << "stop_reason=" << reason << "\n";
-                ofs.flush();
-                ofs.close();
-            }
+            std::ofstream ofs("docs/limit.md");
+            ofs << "limit_interval_us=" << current_interval_us_.load() << "\n";
+            ofs << "stop_reason=" << reason << "\n";
+            ofs.flush();
+            ofs.close();
             std::_Exit(0);
         }
 
         // Check for server death/unresponsiveness (termination condition)
-        if (!is_latency_mode_ && is_ready() && sent_count_.load(std::memory_order_relaxed) > 0) {
+        if (is_ready() && sent_count_.load(std::memory_order_relaxed) > 0) {
             double secs_since_resp = std::chrono::duration_cast<std::chrono::seconds>(now - last_response_time_).count();
             double resp_ratio = resp_observer_ ? resp_observer_->get_occupancy_ratio() : 0.0;
             
@@ -302,16 +279,7 @@ private:
         step_start_time_ = std::chrono::steady_clock::now();
         last_response_time_ = std::chrono::steady_clock::now();
 
-        if (is_latency_mode_) {
-            gen_.seed(12345);
-        }
         while (running_) {
-            if (is_latency_mode_ && sent_count_.load(std::memory_order_relaxed) >= 100000) {
-                std::this_thread::sleep_for(std::chrono::seconds(2));
-                generate_latency_report();
-                running_ = false;
-                std::_Exit(0);
-            }
             // Execute trading actions
             do_trading_action();
 
@@ -537,15 +505,13 @@ private:
             }
         }
 
-        if (!is_latency_mode_) {
-            // 只會一直加速，不會調整 (only accelerates, never adjusts back)
-            // Reduce interval by 10% to continuously accelerate
-            double next_interval = current_interval_us_.load(std::memory_order_relaxed) * 0.90;
-            if (next_interval < 1.0) {
-                next_interval = 1.0;
-            }
-            current_interval_us_.store(next_interval, std::memory_order_relaxed);
+        // 只會一直加速，不會調整 (only accelerates, never adjusts back)
+        // Reduce interval by 10% to continuously accelerate
+        double next_interval = current_interval_us_.load(std::memory_order_relaxed) * 0.90;
+        if (next_interval < 1.0) {
+            next_interval = 1.0;
         }
+        current_interval_us_.store(next_interval, std::memory_order_relaxed);
 
         // Prep snapshots for next step
         step_counter_++;
@@ -607,96 +573,23 @@ private:
     std::uniform_int_distribution<uint64_t> dist_qty_{1, 10};
     int64_t mid_price_{5000};
     
-    bool is_latency_mode_ = false;
-    std::vector<double> rtt_new_;
-    std::vector<double> rtt_mod_short_;
-    std::vector<double> rtt_mod_long_;
-    std::vector<double> rtt_can_;
     std::atomic<bool> next_is_short_mod_{false};
     std::unordered_set<uint64_t> short_mod_exec_ids_;
-
-    void generate_latency_report() {
-        auto calc_stats = [](std::vector<double>& rtts) {
-            if (rtts.empty()) return std::string("       -       ");
-            std::sort(rtts.begin(), rtts.end());
-            double sum = 0; for(auto v: rtts) sum += v;
-            double avg = sum / rtts.size();
-            double p90 = rtts[static_cast<size_t>(rtts.size() * 0.90)];
-            double p99 = rtts[static_cast<size_t>(rtts.size() * 0.99)];
-            double p999 = rtts[static_cast<size_t>(rtts.size() * 0.999)];
-            double max_v = rtts.back();
-            char buf[256];
-            snprintf(buf, sizeof(buf), "%7.2f/%7.2f/%7.2f/%7.2f/%7.2f", avg, p90, p99, p999, max_v);
-            return std::string(buf);
-        };
-        
-        std::lock_guard<std::mutex> lock(step_stats_mtx_);
-        std::string stat_new = calc_stats(rtt_new_);
-        std::string stat_mod_short = calc_stats(rtt_mod_short_);
-        std::string stat_mod_long = calc_stats(rtt_mod_long_);
-        std::string stat_can = calc_stats(rtt_can_);
-        std::vector<double> rtt_all;
-        rtt_all.insert(rtt_all.end(), rtt_new_.begin(), rtt_new_.end());
-        rtt_all.insert(rtt_all.end(), rtt_mod_short_.begin(), rtt_mod_short_.end());
-        rtt_all.insert(rtt_all.end(), rtt_mod_long_.begin(), rtt_mod_long_.end());
-        rtt_all.insert(rtt_all.end(), rtt_can_.begin(), rtt_can_.end());
-        std::string stat_all = calc_stats(rtt_all);
-
-        std::ifstream ifs("docs/latency-report");
-        std::vector<std::string> lines;
-        std::string line;
-        while(std::getline(ifs, line)) {
-            lines.push_back(line);
-        }
-        
-        std::string h1 = "    client E2E (avg/p90/p99/p999/max)";
-        std::string sep = "-------------------------------------------";
-
-        if (lines.size() >= 9) {
-            lines[0] += " ==========================================";
-            lines[1] += " " + h1;
-            lines[2] += " " + sep;
-            lines[3] += "  " + stat_new;
-            lines[4] += "  " + stat_mod_long; // Assume Modify row is 2nd in latency-report
-            lines[5] += "  " + stat_can;
-            lines[6] += " " + sep;
-            lines[7] += "  " + stat_all;
-            lines[8] += " ==========================================";
-        } else {
-            lines.push_back(h1);
-            lines.push_back("New:       " + stat_new);
-            lines.push_back("Mod Short: " + stat_mod_short);
-            lines.push_back("Mod Long:  " + stat_mod_long);
-            lines.push_back("Cancel:    " + stat_can);
-            lines.push_back("ALL:       " + stat_all);
-        }
-
-        std::ofstream ofs("docs/latency-report");
-        for (const auto& l : lines) {
-            ofs << l << "\n";
-            std::cout << l << "\n";
-        }
-    }
 };
 
 } // namespace Exchange
 
-int main(int argc, char** argv) {
+int main() {
     std::signal(SIGINT, [](int) {
         std::cout << "\n[StressTrader] Caught SIGINT. Gracefully shutting down..." << std::endl;
         Exchange::g_stop = 1;
     });
-
-    bool is_latency_mode = false;
-    if (argc > 1 && std::string(argv[1]) == "latency") {
-        is_latency_mode = true;
-    }
 
     Exchange::AlgoTradingConfig config;
     config.client_id = 999;
     config.symbol_ids = {1};
     config.timer_interval_ms = 100; // fast on_timer checking
 
-    Exchange::StressTrader trader(config, is_latency_mode);
+    Exchange::StressTrader trader(config);
     return trader.run();
 }
