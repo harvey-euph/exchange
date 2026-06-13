@@ -1,4 +1,5 @@
 #include "ClientDatabase.hpp"
+#include "define.hpp"
 #include <iostream>
 #include <pqxx/pqxx>
 
@@ -121,17 +122,42 @@ void PostgresClientDatabase::updatePosition(uint32_t client_id, uint32_t symbol_
     w.commit();
 }
 
-void PostgresClientDatabase::addOrUpdateOpenOrder(uint32_t client_id, uint64_t order_id, const uint8_t* data, size_t size) {
-    (void)size;
+void PostgresClientDatabase::update_on_execution(const OrderResponseT* resp, bool not_sent) {
+    uint32_t client_id = resp->client_id;
+    if ((EXEC_MASK_POSITION_UPDATE >> resp->exec_type) & 1) {
+        int64_t cost = static_cast<int64_t>(resp->p * resp->q);
+        if (resp->side == Side_Buy) {
+            updatePosition(client_id, 0, -cost);
+            updatePosition(client_id, resp->symbol_id, static_cast<int64_t>(resp->q));
+        } else {
+            updatePosition(client_id, 0, cost);
+            updatePosition(client_id, resp->symbol_id, -static_cast<int64_t>(resp->q));
+        }
+    }
+    if ((EXEC_MASK_UPSERT_OPEN >> resp->exec_type) & 1) {
+        addOrUpdateOpenOrder(resp);
+    } else if ((EXEC_MASK_REMOVE_OPEN >> resp->exec_type) & 1) {
+        removeOpenOrder(client_id, resp->order_id);
+    }
+    if (not_sent) {
+        flatbuffers::FlatBufferBuilder fbb(256);
+        auto resp_offset = OrderResponse::Pack(fbb, resp);
+        auto client_resp = CreateClientResponse(fbb, ClientResponseData_OrderResponse, resp_offset.Union());
+        fbb.Finish(client_resp);
+        addPendingResponse(client_id, fbb.GetBufferPointer(), fbb.GetSize());
+    }
+}
+
+void PostgresClientDatabase::addOrUpdateOpenOrder(const OrderResponseT* resp) {
     std::lock_guard<std::mutex> lock(mutex_);
     reconnect_if_needed();
-    auto client_resp = flatbuffers::GetRoot<ClientResponse>(data);
-    if (client_resp->data_type() != ClientResponseData_OrderResponse) return;
-    auto order_resp = client_resp->data_as_OrderResponse();
-    uint32_t symbol_id = order_resp->symbol_id();
-    int16_t side = static_cast<int16_t>(order_resp->side());
-    int64_t price = order_resp->p();
-    uint64_t qty = order_resp->q();
+
+    uint32_t client_id = resp->client_id;
+    uint64_t order_id = resp->order_id;
+    uint32_t symbol_id = resp->symbol_id;
+    int16_t side = static_cast<int16_t>(resp->side);
+    int64_t price = resp->p;
+    uint64_t qty = resp->q;
  
     pqxx::work w(*conn_);
 

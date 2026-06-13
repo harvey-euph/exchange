@@ -16,6 +16,7 @@ struct recv_ctx {
     void *ubuf;
     const struct iovec *iov;
     uint32_t nr_segs;
+    uint64_t ts0;
 };
 
 struct {
@@ -76,15 +77,40 @@ struct {
     __type(value, uint64_t); // exec_id
 } active_exec_id_map SEC(".maps");
 
-// Latency event sent to userspace C++ app
-struct latency_event {
+struct msg_flow_event {
     uint64_t exec_id;
-    uint64_t latency_ns;
-    uint64_t engine_latency;
-    uint64_t manager_latency;
+    uint64_t ts0;
+    uint64_t ts1;
+    uint64_t ts2;
+    uint64_t ts3;
+    uint64_t ts4;
+    uint64_t ts5;
+    uint64_t ts6;
+    uint64_t ts7;
     uint8_t exec_type;
-    uint8_t padding[7]; // align to 8-byte boundary
+    uint8_t padding[7];
 };
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 100000);
+    __type(key, uint64_t);
+    __type(value, struct msg_flow_event);
+} flow_events SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, uint32_t); // tid
+    __type(value, uint64_t); // exec_id
+} active_tx_exec_id SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 10240);
+    __type(key, uint32_t);
+    __type(value, uint64_t);
+} tid_ts1 SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -329,10 +355,10 @@ static __always_inline void process_rx_packet(const uint8_t *payload, uint32_t l
         if (!read_unmasked_8(payload, len, payload_offset, order_req_pos + exec_id_offset_field, masking_key, mask, &exec_id)) { fail_stage = 9; goto parse_failed; }
         
         {
-            int ret = bpf_map_update_elem(&pending_requests, &exec_id, &timestamp_ns, BPF_ANY);
-            if (ret != 0) {
-                bpf_printk("[ERR lat-tracer.bpf.c:%d] pending_requests update failed: %d", __LINE__, ret);
-            }
+            struct msg_flow_event ev = {};
+            ev.exec_id = exec_id;
+            ev.ts0 = timestamp_ns;
+            bpf_map_update_elem(&flow_events, &exec_id, &ev, BPF_ANY);
         }
         
         goto next_frame;
@@ -432,41 +458,17 @@ static __always_inline void process_tx_packet(const uint8_t *payload, uint32_t l
         if (!read_unmasked_8(payload, len, payload_offset, order_resp_pos + exec_id_offset_field, masking_key, mask, &exec_id)) { fail_stage = 9; goto parse_failed; }
         
         {
-            // Perform latency correlation in eBPF kernel space
-            uint64_t *rx_timestamp_ns = bpf_map_lookup_elem(&pending_requests, &exec_id);
-            if (rx_timestamp_ns) {
-                uint64_t latency_ns = timestamp_ns - *rx_timestamp_ns;
-                bpf_map_delete_elem(&pending_requests, &exec_id);
+            uint32_t tid = bpf_get_current_pid_tgid();
+            bpf_map_update_elem(&active_tx_exec_id, &tid, &exec_id, BPF_ANY);
 
-                uint64_t *engine_lat_ptr = bpf_map_lookup_elem(&engine_lat_map, &exec_id);
-                uint64_t engine_latency = engine_lat_ptr ? *engine_lat_ptr : 0;
-                if (engine_lat_ptr) bpf_map_delete_elem(&engine_lat_map, &exec_id);
-
-                uint64_t *manager_lat_ptr = bpf_map_lookup_elem(&manager_lat_map, &exec_id);
-                uint64_t manager_latency = manager_lat_ptr ? *manager_lat_ptr : 0;
-                if (manager_lat_ptr) bpf_map_delete_elem(&manager_lat_map, &exec_id);
-
-                // Submit latency event to userspace ring buffer
-                struct latency_event *ev = bpf_ringbuf_reserve(&rb, sizeof(*ev), 0);
-                if (ev) {
-                    ev->exec_id = exec_id;
-                    ev->latency_ns = latency_ns;
-                    ev->engine_latency = engine_latency;
-                    ev->manager_latency = manager_latency;
-                    uint8_t reported_exec_type = exec_type;
-                    if (exec_type == 5) { // ExecType_Replaced
-                        if (exec_id % 2 == 0) reported_exec_type = 100; // ModifyShort
-                        else reported_exec_type = 101; // ModifyLong
-                    }
-                    ev->exec_type = reported_exec_type;
-                    bpf_ringbuf_submit(ev, 0);
-                } else {
-                    bpf_printk("[ERR lat-tracer.bpf.c:%d] bpf_ringbuf_reserve failed for exec_id=%llu", __LINE__, exec_id);
+            struct msg_flow_event *ev = bpf_map_lookup_elem(&flow_events, &exec_id);
+            if (ev) {
+                uint8_t reported_exec_type = exec_type;
+                if (exec_type == 5) { // ExecType_Replaced
+                    if (exec_id % 2 == 0) reported_exec_type = 100; // ModifyShort
+                    else reported_exec_type = 101; // ModifyLong
                 }
-            } else {
-                if (exec_type == 0 || exec_type == 4 || exec_type == 5 || exec_type == 8) {
-                    bpf_printk("[ERR lat-tracer.bpf.c:%d] process_tx_packet: no rx_timestamp_ns for exec_id=%llu, type=%u", __LINE__, exec_id, exec_type);
-                }
+                ev->exec_type = reported_exec_type;
             }
         }
         
@@ -497,6 +499,7 @@ int BPF_KPROBE(tcp_recvmsg, struct sock *sk, struct msghdr *msg)
     rctx.ubuf = BPF_CORE_READ(msg, msg_iter.ubuf);
     rctx.iov = BPF_CORE_READ(msg, msg_iter.__iov);
     rctx.nr_segs = BPF_CORE_READ(msg, msg_iter.nr_segs);
+    rctx.ts0 = bpf_ktime_get_ns();
 
     bpf_map_update_elem(&recv_ctx_map, &tid, &rctx, BPF_ANY);
     return 0;
@@ -523,7 +526,7 @@ int BPF_KRETPROBE(tcp_recvmsg_ret, int ret)
     uint8_t *payload = bpf_map_lookup_elem(&scratch_map, &zero);
     if (!payload) return 0;
 
-    uint64_t timestamp_ns = bpf_ktime_get_ns();
+    uint64_t timestamp_ns = rctx->ts0;
     copy_iov_iter(payload, iter_type, iov_offset, ubuf, iov, nr_segs);
 
     process_rx_packet(payload, ret, timestamp_ns);
@@ -555,84 +558,93 @@ int BPF_KPROBE(tcp_sendmsg, struct sock *sk, struct msghdr *msg, size_t size)
     return 0;
 }
 
-SEC("uprobe//home/andy16384/exchange/build/services/client-manager:_ZN8Exchange13ClientManager22process_client_requestESt10shared_ptrINS_8WSClientEEPKvm")
-int BPF_UPROBE(process_client_request_entry, void *this_ptr, void *client_ptr, const void *data, size_t size) {
-    uint64_t exec_id;
-    if (get_exec_id_from_client_request(data, &exec_id)) {
-        uint64_t ts = bpf_ktime_get_ns();
-        bpf_map_update_elem(&manager_start_map, &exec_id, &ts, BPF_ANY);
-    } else {
-        bpf_printk("[ERR lat-tracer.bpf.c:547] process_client_request: failed to get exec_id");
-    }
-    return 0;
-}
 
-SEC("uprobe")
-int BPF_UPROBE(handle_execution_response_entry, void *this_ptr, const void *resp) {
-    uint64_t exec_id;
-    if (get_exec_id_from_order_response_t(resp, &exec_id)) {
-        uint32_t tid = bpf_get_current_pid_tgid();
-        bpf_map_update_elem(&active_exec_id_map, &tid, &exec_id, BPF_ANY);
-    } else {
-        bpf_printk("[ERR lat-tracer.bpf.c:560] handle_execution_response_entry: failed to get exec_id");
-    }
-    return 0;
-}
-
-SEC("uretprobe")
-int BPF_URETPROBE(handle_execution_response_ret) {
+SEC("kretprobe/tcp_sendmsg")
+int BPF_KRETPROBE(tcp_sendmsg_ret, int ret)
+{
     uint32_t tid = bpf_get_current_pid_tgid();
-    uint64_t *exec_id_ptr = bpf_map_lookup_elem(&active_exec_id_map, &tid);
+    uint64_t *exec_id_ptr = bpf_map_lookup_elem(&active_tx_exec_id, &tid);
     if (!exec_id_ptr) return 0;
 
     uint64_t exec_id = *exec_id_ptr;
-    bpf_map_delete_elem(&active_exec_id_map, &tid);
-    
-    uint64_t *start_ptr = bpf_map_lookup_elem(&manager_start_map, &exec_id);
-    if (start_ptr) {
-        uint64_t latency = bpf_ktime_get_ns() - *start_ptr;
-        bpf_map_update_elem(&manager_lat_map, &exec_id, &latency, BPF_ANY);
-        bpf_map_delete_elem(&manager_start_map, &exec_id);
-    } else {
-        // bpf_printk("[ERR lat-tracer.bpf.c:581] handle_execution_response_ret: no start_ptr for exec_id=%llu", exec_id);
-        // This is actually expected for some rejects that didn't go through process_client_request?
-        // Actually it should go through process_client_request. But to avoid spam we can omit.
-    }
-    return 0;
-}
+    bpf_map_delete_elem(&active_tx_exec_id, &tid);
 
-SEC("uprobe")
-int BPF_UPROBE(processRequest_entry, void *this_ptr, const void *req) {
-    uint64_t exec_id;
-    if (get_exec_id_from_order_request(req, &exec_id)) {
-        uint64_t ts = bpf_ktime_get_ns();
-        bpf_map_update_elem(&engine_start_map, &exec_id, &ts, BPF_ANY);
+    struct msg_flow_event *ev = bpf_map_lookup_elem(&flow_events, &exec_id);
+    if (ev) {
+        ev->ts7 = bpf_ktime_get_ns();
         
-        uint32_t tid = bpf_get_current_pid_tgid();
-        bpf_map_update_elem(&active_exec_id_map, &tid, &exec_id, BPF_ANY);
-    } else {
-        bpf_printk("[ERR lat-tracer.bpf.c:598] processRequest_entry: failed to get exec_id");
+        struct msg_flow_event *ring_ev = bpf_ringbuf_reserve(&rb, sizeof(*ring_ev), 0);
+        if (ring_ev) {
+            *ring_ev = *ev;
+            bpf_ringbuf_submit(ring_ev, 0);
+        }
+        bpf_map_delete_elem(&flow_events, &exec_id);
     }
     return 0;
 }
 
-SEC("uretprobe")
-int BPF_URETPROBE(processRequest_ret) {
+#include <bpf/usdt.bpf.h>
+
+SEC("usdt")
+int req_entry(struct pt_regs *ctx) {
     uint32_t tid = bpf_get_current_pid_tgid();
-    uint64_t *exec_id_ptr = bpf_map_lookup_elem(&active_exec_id_map, &tid);
-    if (!exec_id_ptr) return 0;
+    uint64_t ts = bpf_ktime_get_ns();
+    bpf_map_update_elem(&tid_ts1, &tid, &ts, BPF_ANY);
+    return 0;
+}
 
-    uint64_t exec_id = *exec_id_ptr;
-    bpf_map_delete_elem(&active_exec_id_map, &tid);
+SEC("usdt")
+int req_enqueue(struct pt_regs *ctx) {
+    uint64_t exec_id = 0;
+    bpf_usdt_arg(ctx, 0, (long *)&exec_id);
     
-    uint64_t *start_ptr = bpf_map_lookup_elem(&engine_start_map, &exec_id);
-    if (start_ptr) {
-        uint64_t latency = bpf_ktime_get_ns() - *start_ptr;
-        bpf_map_update_elem(&engine_lat_map, &exec_id, &latency, BPF_ANY);
-        bpf_map_delete_elem(&engine_start_map, &exec_id);
-    } else {
-        // bpf_printk("[ERR lat-tracer.bpf.c:618] processRequest_ret: no start_ptr for exec_id=%llu", exec_id);
+    uint32_t tid = bpf_get_current_pid_tgid();
+    uint64_t *ts1 = bpf_map_lookup_elem(&tid_ts1, &tid);
+    if (ts1) {
+        struct msg_flow_event *ev = bpf_map_lookup_elem(&flow_events, &exec_id);
+        if (ev) {
+            ev->ts1 = *ts1;
+            ev->ts2 = bpf_ktime_get_ns();
+        }
+        bpf_map_delete_elem(&tid_ts1, &tid);
     }
     return 0;
 }
 
+SEC("usdt")
+int ob_req_entry(struct pt_regs *ctx) {
+    uint64_t exec_id = 0;
+    bpf_usdt_arg(ctx, 0, (long *)&exec_id);
+    struct msg_flow_event *ev = bpf_map_lookup_elem(&flow_events, &exec_id);
+    if (ev) ev->ts3 = bpf_ktime_get_ns();
+    return 0;
+}
+
+SEC("usdt")
+int ob_resp_enqueue(struct pt_regs *ctx) {
+    uint64_t exec_id = 0;
+    bpf_usdt_arg(ctx, 0, (long *)&exec_id);
+    struct msg_flow_event *ev = bpf_map_lookup_elem(&flow_events, &exec_id);
+    if (ev) ev->ts4 = bpf_ktime_get_ns();
+    return 0;
+}
+
+SEC("usdt")
+int exec_resp_entry(struct pt_regs *ctx) {
+    uint64_t exec_id = 0;
+    bpf_usdt_arg(ctx, 0, (long *)&exec_id);
+    struct msg_flow_event *ev = bpf_map_lookup_elem(&flow_events, &exec_id);
+    if (ev) ev->ts5 = bpf_ktime_get_ns();
+    return 0;
+}
+
+SEC("usdt")
+int exec_resp_before_db(struct pt_regs *ctx) {
+    uint64_t exec_id = 0;
+    bpf_usdt_arg(ctx, 0, (long *)&exec_id);
+    struct msg_flow_event *ev = bpf_map_lookup_elem(&flow_events, &exec_id);
+    if (ev) ev->ts6 = bpf_ktime_get_ns();
+    return 0;
+}
+
+char _license2[] SEC("license") = "GPL";

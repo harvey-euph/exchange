@@ -4,6 +4,7 @@
 #include "TimeUtil.hpp"
 #include <algorithm>
 #include <random>
+#include <sys/sdt.h>
 
 using namespace Exchange;
 
@@ -24,6 +25,8 @@ OrderBook::OrderBook(
     , l3(L3_UPDATE_RING)
     , price_array_(max_price_levels_)
 {
+    resp.symbol_id = symbol_id_;
+
     if (min_step <= 0) {
         throw std::invalid_argument("min_step must be positive");
     }
@@ -56,6 +59,8 @@ void OrderBook::processRequest(const OrderRequest* req)
     if (!req) {
         return;
     }
+
+    DTRACE_PROBE1(exchange, ob_req_entry, req->exec_id());
 
     // logOrderRequest(req);
 
@@ -375,12 +380,11 @@ void OrderBook::sendResponse(ExecType exec_type, uint64_t order_id, uint32_t cli
                               RejectCode reject_code)
 {
     if (!response_ring_) return;
-    OrderResponseT resp;
+    DTRACE_PROBE1(exchange, ob_resp_enqueue, exec_id);
     resp.exec_type = exec_type;
     resp.order_id = order_id;
     resp.client_id = client_id;
     resp.exec_id = exec_id;
-    resp.symbol_id = symbol_id_;
     resp.side = side;
     resp.p = p;
     resp.q = q;

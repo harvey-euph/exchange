@@ -67,6 +67,7 @@ private:
     const int64_t price_index_offset_; // 
     const size_t  max_price_levels_;   // price_array_ 大小
     SHMRingBuffer* response_ring_;
+    OrderResponseT resp;
     L2Updater l2;
     L3Updater l3;
 

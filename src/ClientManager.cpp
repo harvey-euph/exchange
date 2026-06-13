@@ -3,6 +3,7 @@
 #include "TimeUtil.hpp"
 #include <iostream>
 #include <algorithm>
+#include <sys/sdt.h>
 
 namespace Exchange {
 
@@ -120,6 +121,7 @@ ClientManager::ClientManager(int port, SHMRingBuffer* request_ring, SHMRingBuffe
 
 void ClientManager::process_client_request(WSClientPtr client, const void* data, size_t size)
 {    
+    DTRACE_PROBE(exchange, req_entry);
     (void) size;
 
     // Check session readiness
@@ -144,6 +146,7 @@ void ClientManager::process_client_request(WSClientPtr client, const void* data,
                 order_req->type(), order_req->p(), order_req->q(), 
                 order_req->visible_qty(), order_req->timestamp());
             fbb.Finish(or_offset);
+            DTRACE_PROBE1(exchange, req_enqueue, order_req->exec_id());
             request_ring_->enqueue(fbb.GetBufferPointer(), fbb.GetSize());
             break;
         }
@@ -164,50 +167,28 @@ void ClientManager::process_client_request(WSClientPtr client, const void* data,
 
 void ClientManager::handle_execution_response(const OrderResponseT* resp)
 {
+    DTRACE_PROBE1(exchange, exec_resp_entry, resp->exec_id);
     uint32_t client_id = resp->client_id;
+    bool not_sent = true;
 
-    // logOrderResponse(resp, "[ClientManager] Execution Report:");
-
-    if ((EXEC_MASK_POSITION_UPDATE >> resp->exec_type) & 1)
     {
-        int64_t cost = static_cast<int64_t>(resp->p * resp->q);
-        if (resp->side == Side_Buy) {
-            db_->updatePosition(client_id, 0, -cost); // Pay USD
-            db_->updatePosition(client_id, resp->symbol_id, static_cast<int64_t>(resp->q)); // Get Asset
-        } else {
-            db_->updatePosition(client_id, 0, cost); // Get USD
-            db_->updatePosition(client_id, resp->symbol_id, -static_cast<int64_t>(resp->q)); // Give Asset
+        std::lock_guard<std::mutex> sessions_guard(sessions_mutex_);
+        auto it = client_sessions_.find(client_id);
+        if (it != client_sessions_.end() && !it->second.empty()) {
+            flatbuffers::FlatBufferBuilder fbb(256);
+            auto resp_offset = OrderResponse::Pack(fbb, resp);
+            auto client_resp = CreateClientResponse(fbb, ClientResponseData_OrderResponse, resp_offset.Union());
+            fbb.Finish(client_resp);
+
+            for (auto& session : it->second) {
+                session->send(fbb.GetBufferPointer(), fbb.GetSize());
+            }
+            not_sent = false;
         }
     }
 
-    if ((EXEC_MASK_UPSERT_OPEN >> resp->exec_type) & 1)
-    {
-        flatbuffers::FlatBufferBuilder fbb(256);
-        auto resp_offset = CreateOrderResponse(fbb, ExecType_OrderStatus, resp->order_id, resp->client_id, resp->exec_id, resp->symbol_id, resp->side, resp->p, resp->q, resp->reject_code);
-        auto client_resp = CreateClientResponse(fbb, ClientResponseData_OrderResponse, resp_offset.Union());
-        fbb.Finish(client_resp);
-        db_->addOrUpdateOpenOrder(client_id, resp->order_id, fbb.GetBufferPointer(), fbb.GetSize());
-        // db_->addOrUpdateOpenOrder(client_id, resp);
-    }
-    else if ((EXEC_MASK_REMOVE_OPEN >> resp->exec_type) & 1)
-    {
-        db_->removeOpenOrder(client_id, resp->order_id);
-    }
-
-    flatbuffers::FlatBufferBuilder fbb(256);
-    auto resp_offset = OrderResponse::Pack(fbb, resp);
-    auto client_resp = CreateClientResponse(fbb, ClientResponseData_OrderResponse, resp_offset.Union());
-    fbb.Finish(client_resp);
-    
-    std::lock_guard<std::mutex> sessions_guard(sessions_mutex_);
-    auto it = client_sessions_.find(client_id);
-    if (it != client_sessions_.end() && !it->second.empty()) {
-        for (auto& session : it->second) {
-            session->send(fbb.GetBufferPointer(), fbb.GetSize());
-        }
-    } else {
-        db_->addPendingResponse(client_id, fbb.GetBufferPointer(), fbb.GetSize());
-    }
+    DTRACE_PROBE1(exchange, exec_resp_before_db, resp->exec_id);
+    db_->update_on_execution(resp, not_sent);
 }
 
 int ClientManager::poll_client() {
