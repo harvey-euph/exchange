@@ -25,7 +25,8 @@ using tcp = boost::asio::ip::tcp;
 
 
 
-net::awaitable<void> do_session(tcp::socket socket) {
+net::awaitable<void> do_session(tcp::socket socket)
+{
     beast::tcp_stream stream(std::move(socket));
     beast::flat_buffer buffer;
 
@@ -160,9 +161,9 @@ int main() {
             Exchange::set_thread_affinity(main_core, "PublicData_Main");
         }
         
-        net::co_spawn(ioc, do_listen({net::ip::make_address("0.0.0.0"), 8081}), net::detached);
+        net::co_spawn(ioc, do_listen({net::ip::make_address("0.0.0.0"), PORT_PUBLIC_DATA}), net::detached);
 
-        std::cout << "[PublicData] Listening on 0.0.0.0:8081 (Coroutine mode)" << std::endl;
+        std::cout << "[PublicData] Listening on 0.0.0.0:" << PORT_PUBLIC_DATA << " (Coroutine mode)" << std::endl;
         ioc.run();
     } catch (const std::exception& e) {
         std::cerr << "[PublicData] Main error: " << e.what() << std::endl;

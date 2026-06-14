@@ -25,7 +25,7 @@ int main()
 
     std::cout << "[L2Publisher] Connected successfully. Start consuming..." << std::endl;
 
-    Exchange::L2Publisher publisher(9002, ring_buffer);
+    Exchange::L2Publisher publisher(PORT_L2_PUBLISHER, ring_buffer);
     publisher.run();
 
     std::cout << "[L2Publisher] Exiting and cleaning up..." << std::endl;

@@ -101,14 +101,14 @@ int main() {
         net::io_context ioc{1};
         int main_core = HTTP_MAIN_CORE;
         if (main_core >= 0) {
-            Exchange::set_thread_affinity(main_core, "HttpAccepter_Main");
+            Exchange::set_thread_affinity(main_core, "HttpAccepter");
         }
         
         Exchange::SHMRingBuffer request_ring(ORDER_REQUEST, ORDER_REQUEST_SIZE);
         
-        net::co_spawn(ioc, do_listen({net::ip::make_address("0.0.0.0"), 8080}, request_ring), net::detached);
+        net::co_spawn(ioc, do_listen({net::ip::make_address("0.0.0.0"), PORT_HTTP_ACCEPTER}, request_ring), net::detached);
 
-        std::cout << "[Accepter] Listening on 0.0.0.0:8080 (Coroutine mode)" << std::endl;
+        std::cout << "[Accepter] Listening on 0.0.0.0:" << PORT_HTTP_ACCEPTER << " (Coroutine mode)" << std::endl;
         ioc.run();
     } catch (const std::exception& e) {
         std::cerr << "[Accepter] Main error: " << e.what() << std::endl;

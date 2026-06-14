@@ -24,11 +24,11 @@ int main()
         return -1;
     }
 
-    Exchange::ClientManager manager(9001, request_ring, response_ring, db);
+    Exchange::ClientManager manager(PORT_CLIENT_MANAGER, request_ring, response_ring, db);
 
     int main_core = CM_MAIN_CORE;
     if (main_core >= 0) {
-        Exchange::set_thread_affinity(main_core, "ClientManager_Main");
+        Exchange::set_thread_affinity(main_core, "ClientManager");
     }
 
     manager.run();

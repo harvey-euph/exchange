@@ -25,7 +25,7 @@ int main()
 
     std::cout << "[L3Publisher] Connected successfully. Start consuming..." << std::endl;
 
-    Exchange::L3Publisher publisher(9003, ring_buffer);
+    Exchange::L3Publisher publisher(PORT_L3_PUBLISHER, ring_buffer);
     publisher.run();
 
     std::cout << "[L3Publisher] Exiting and cleaning up..." << std::endl;

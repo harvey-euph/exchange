@@ -13,6 +13,13 @@
 #define L2_UPDATE_RING_SIZE 65536
 #define L3_UPDATE_RING_SIZE 131072
 
+// Service Ports
+#define PORT_CLIENT_MANAGER 9001
+#define PORT_L2_PUBLISHER   9002
+#define PORT_L3_PUBLISHER   9003
+#define PORT_HTTP_ACCEPTER  8080
+#define PORT_PUBLIC_DATA    8081
+
 // Unified sleep duration in milliseconds for dev/test environment polling loops
 #define POLL_SLEEP_MS 1
 
