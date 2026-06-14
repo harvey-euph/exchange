@@ -22,7 +22,6 @@ int MatchingEngine::poll_server() {
         auto req = flatbuffers::GetRoot<OrderRequest>(data_ptr);
         book_->processRequest(req);
 
-        // g_current_request_start_tsc = 0;
         return 1;
     }
     return 0;
