@@ -17,12 +17,13 @@ This project serves as a showcase of applying both low-level system engineering 
 sudo apt-get update && sudo apt-get install -y \
   build-essential git clang \
   libssl-dev zlib1g-dev libboost-all-dev \
+  libpq-dev libpqxx-dev \
   flatbuffers-compiler libflatbuffers-dev \
   libgtest-dev libgmock-dev \
   libbpf-dev bpftool systemtap-sdt-dev
 ```
 
-## Log in process
+## LogOn process
 
 ```mermaid
 sequenceDiagram
