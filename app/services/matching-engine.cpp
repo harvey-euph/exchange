@@ -18,9 +18,14 @@ int main()
     std::cout << "[OrderCore] Starting matching engine..." << std::endl;
 
     // Query DB for symbol 1 parameters
-    int64_t min_step = 1;
-    int64_t price_offset = 2000;
-    size_t max_price_levels = 8192;
+    int64_t min_step = 25;                       // min_step_raw for BTC
+    int64_t price_offset = 120000;              // min_price_raw / min_step_raw (3000000 / 25)
+    size_t max_price_levels = 360001;           // (max_price_raw - min_price_raw) / min_step_raw + 1
+    
+    std::cout << "[OrderCore] Using internal Symbol 1 config (BTC): min_step=" << min_step 
+              << ", price_offset=" << price_offset << ", max_price_levels=" << max_price_levels << std::endl;
+
+    /*
     try {
         auto conn = Exchange::DbUtil::getDbConnection();
         pqxx::work w(*conn);
@@ -43,6 +48,7 @@ int main()
     } catch (const std::exception& e) {
         std::cerr << "[OrderCore] ERROR querying DB: " << e.what() << ", using default parameters" << std::endl;
     }
+    */
 
     Exchange::SHMRingBuffer response_ring(ORDER_RESPONSE, ORDER_RESPONSE_SIZE);
     Exchange::OrderBook book(1, min_step, price_offset, max_price_levels, &response_ring);
