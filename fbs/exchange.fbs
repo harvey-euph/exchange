@@ -37,6 +37,18 @@ table OrderResponse
     reject_code: RejectCode;
 }
 
+enum AdminAction : byte { LogOn = 0, LogOut = 1 }
+
+table AdminRequest {
+    action: AdminAction;
+    client_id: uint;
+    username: string;
+}
+
+table OpenOrderRequest {
+    client_id: uint;
+}
+
 table PositionRequest {
     client_id: uint;
     symbol_id: uint;
@@ -50,7 +62,9 @@ table OrderStatusRequest {
 union ClientRequestData {
     OrderRequest,
     PositionRequest,
-    OrderStatusRequest
+    OrderStatusRequest,
+    AdminRequest,
+    OpenOrderRequest
 }
 
 table ClientRequest {

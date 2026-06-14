@@ -12,6 +12,8 @@ import { OrderAction } from '../fbs/exchange/order-action';
 import { OrderType } from '../fbs/exchange/order-type';
 import { ClientRequest } from '../fbs/exchange/client-request';
 import { ClientRequestData as ClientReqData } from '../fbs/exchange/client-request-data';
+import { AdminRequest } from '../fbs/exchange/admin-request';
+import { AdminAction } from '../fbs/exchange/admin-action';
 import { PositionRequest } from '../fbs/exchange/position-request';
 import { RejectCode } from '../fbs/exchange/reject-code';
 import type { OrderData, ConnectedState, SymbolPosition, SymbolInfoData } from '../types';
@@ -411,7 +413,21 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
       mgmtReadyNotifiedRef.current = false;
       addMgmtLog(`Connected ClientID=${clientId}`);
       setConnected(prev => ({ ...prev, mgmt: true }));
-      ws.send(`sub ${numericClientId}`);
+      const builder = new flatbuffers.Builder(256);
+      const usernameOffset = builder.createString(clientId);
+      AdminRequest.startAdminRequest(builder);
+      AdminRequest.addAction(builder, AdminAction.LogOn);
+      AdminRequest.addClientId(builder, numericClientId);
+      AdminRequest.addUsername(builder, usernameOffset);
+      const adminReqOffset = AdminRequest.endAdminRequest(builder);
+
+      ClientRequest.startClientRequest(builder);
+      ClientRequest.addDataType(builder, ClientReqData.AdminRequest);
+      ClientRequest.addData(builder, adminReqOffset);
+      const clientReqOffset = ClientRequest.endClientRequest(builder);
+
+      builder.finish(clientReqOffset);
+      ws.send(builder.asUint8Array() as any);
     };
 
     ws.onmessage = (event) => {

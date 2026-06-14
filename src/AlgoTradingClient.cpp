@@ -213,7 +213,13 @@ int AlgoTradingClient::run() {
     });
 
     // Subscriptions
-    mgmt_client_->send_text("sub " + std::to_string(config_.client_id));
+    {
+        flatbuffers::FlatBufferBuilder fbb(128);
+        auto admin_req = CreateAdminRequest(fbb, AdminAction_LogOn, config_.client_id);
+        auto client_req = CreateClientRequest(fbb, ClientRequestData_AdminRequest, admin_req.Union());
+        fbb.Finish(client_req);
+        mgmt_client_->send(fbb.GetBufferPointer(), fbb.GetSize());
+    }
     for (auto sym : config_.symbol_ids) {
         // L2 Subscription
         {

@@ -37,20 +37,7 @@ ClientManager::ClientManager(int port, SHMRingBuffer* request_ring, SHMRingBuffe
     };
     
     auto message_handler = [this](WSClientPtr client, const void* data, size_t size) {
-        std::string_view msg(static_cast<const char*>(data), size);
-        if (msg.rfind("sub ", 0) == 0) {
-            try {
-                uint32_t client_id = std::stoul(std::string(msg.substr(4)));
-                this->handle_client_subscription(client, client_id, true);
-            } catch (...) {}
-        } else if (msg.rfind("unsub ", 0) == 0) {
-            try {
-                uint32_t client_id = std::stoul(std::string(msg.substr(6)));
-                this->handle_client_subscription(client, client_id, false);
-            } catch (...) {}
-        } else {
-            this->process_client_request(client, data, size);
-        }
+        this->process_client_request(client, data, size);
     };
 
     ws_adaptor_->set_close_handler(close_handler);
@@ -131,16 +118,31 @@ void ClientManager::handle_client_subscription(WSClientPtr client, uint32_t clie
 void ClientManager::process_client_request(WSClientPtr client, const void* data, size_t size)
 {    
     DTRACE_PROBE(exchange, req_entry);
-    (void) size;
+    
+    flatbuffers::Verifier verifier(reinterpret_cast<const uint8_t*>(data), size);
+    if (!verifier.VerifyBuffer<ClientRequest>(nullptr)) {
+        return;
+    }
+
+    auto request = flatbuffers::GetRoot<ClientRequest>(data);
+    auto type = request->data_type();
+
+    // Logon/Logoff can be executed without is_ready check
+    if (type == ClientRequestData_AdminRequest) {
+        auto admin_req = request->data_as_AdminRequest();
+        if (admin_req->action() == AdminAction_LogOn) {
+            this->handle_client_subscription(client, admin_req->client_id(), true);
+        } else if (admin_req->action() == AdminAction_LogOut) {
+            this->handle_client_subscription(client, admin_req->client_id(), false);
+        }
+        return;
+    }
 
     // Check session readiness
     if (!client->is_ready.load(std::memory_order_acquire)) {
         // Optionally send an error or just ignore
         return;
     }
-
-    auto request = flatbuffers::GetRoot<ClientRequest>(data);
-    auto type = request->data_type();
 
     switch (type) {
         case ClientRequestData_OrderRequest: {
@@ -168,6 +170,17 @@ void ClientManager::process_client_request(WSClientPtr client, const void* data,
             auto client_resp = CreateClientResponse(fbb, ClientResponseData_PositionResponse, pos_resp.Union());
             fbb.Finish(client_resp);
             client->send(fbb.GetBufferPointer(), fbb.GetSize());
+            break;
+        }
+        case ClientRequestData_OpenOrderRequest: {
+            auto open_req = request->data_as_OpenOrderRequest();
+            uint32_t client_id = open_req->client_id();
+
+            auto open_orders = db_->getOpenOrders(client_id);
+            std::cout << "[ClientManager] Sending " << open_orders.size() << " open orders on request." << std::endl;
+            for (auto& order_data : open_orders) {
+                client->send(order_data.data(), order_data.size());
+            }
             break;
         }
         default: break;
