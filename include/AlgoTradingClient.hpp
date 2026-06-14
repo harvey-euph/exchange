@@ -63,8 +63,7 @@ public:
 protected:
     Config config_;
     std::unique_ptr<SimpleWSClient> mgmt_client_;
-    std::unique_ptr<SimpleWSClient> l2_client_;
-    std::unique_ptr<SimpleWSClient> l3_client_;
+    std::unique_ptr<SimpleWSClient> md_client_;
     bool running_ = true;
     uint64_t next_id_ = 1000001;
 

@@ -12,10 +12,10 @@ export default defineConfig({
         ws: true,
         rewrite: (path) => path.replace(/^\/ws-mgmt/, '')
       },
-      '/ws-l2': {
+      '/marketdata': {
         target: 'ws://127.0.0.1:9002',
         ws: true,
-        rewrite: (path) => path.replace(/^\/ws-l2/, '')
+        rewrite: (path) => path.replace(/^\/marketdata/, '')
       },
       '/api': {
         target: 'http://127.0.0.1:8080',

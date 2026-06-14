@@ -207,14 +207,9 @@ private:
                 resp_observer_ = std::make_unique<Exchange::SHMObserver>(ORDER_RESPONSE, 0);
             } catch (...) {}
         }
-        if (!l2_observer_) {
+        if (!md_observer_) {
             try {
-                l2_observer_ = std::make_unique<Exchange::SHMObserver>(L2_UPDATE_RING, 0);
-            } catch (...) {}
-        }
-        if (!l3_observer_) {
-            try {
-                l3_observer_ = std::make_unique<Exchange::SHMObserver>(L3_UPDATE_RING, 0);
+                md_observer_ = std::make_unique<Exchange::SHMObserver>(MARKET_DATA_RING, 0);
             } catch (...) {}
         }
     }
@@ -246,15 +241,13 @@ private:
 
             double req_ratio = req_observer_ ? req_observer_->get_occupancy_ratio() : 0.0;
             double resp_ratio = resp_observer_ ? resp_observer_->get_occupancy_ratio() : 0.0;
-            double l2_ratio = l2_observer_ ? l2_observer_->get_occupancy_ratio() : 0.0;
-            double l3_ratio = l3_observer_ ? l3_observer_->get_occupancy_ratio() : 0.0;
+            double md_ratio = md_observer_ ? md_observer_->get_occupancy_ratio() : 0.0;
 
             {
                 std::lock_guard<std::mutex> lock(step_stats_mtx_);
                 if (req_ratio * 100.0 > peak_req_ratio_) peak_req_ratio_ = req_ratio * 100.0;
                 if (resp_ratio * 100.0 > peak_resp_ratio_) peak_resp_ratio_ = resp_ratio * 100.0;
-                if (l2_ratio * 100.0 > peak_l2_ratio_) peak_l2_ratio_ = l2_ratio * 100.0;
-                if (l3_ratio * 100.0 > peak_l3_ratio_) peak_l3_ratio_ = l3_ratio * 100.0;
+                if (md_ratio * 100.0 > peak_md_ratio_) peak_md_ratio_ = md_ratio * 100.0;
             }
 
             std::this_thread::sleep_for(std::chrono::microseconds(50));
@@ -442,8 +435,7 @@ private:
         double max_rtt_us = 0.0;
         double peak_req = 0.0;
         double peak_resp = 0.0;
-        double peak_l2 = 0.0;
-        double peak_l3 = 0.0;
+        double peak_md = 0.0;
         
         std::vector<double> rtts;
         {
@@ -457,8 +449,7 @@ private:
             
             peak_req = peak_req_ratio_;
             peak_resp = peak_resp_ratio_;
-            peak_l2 = peak_l2_ratio_;
-            peak_l3 = peak_l3_ratio_;
+            peak_md = peak_md_ratio_;
 
             // Reset current step accumulators
             step_rtt_sum_us_ = 0.0;
@@ -466,8 +457,7 @@ private:
             step_max_rtt_us_ = 0.0;
             peak_req_ratio_ = 0.0;
             peak_resp_ratio_ = 0.0;
-            peak_l2_ratio_ = 0.0;
-            peak_l3_ratio_ = 0.0;
+            peak_md_ratio_ = 0.0;
         }
         
         if (!rtts.empty()) {
@@ -490,8 +480,7 @@ private:
                   << "| " << std::setw(7) << std::fixed << std::setprecision(1) << max_rtt_us << " us   "
                   << "| Req:" << std::setw(4) << std::fixed << std::setprecision(1) << peak_req << "%"
                   << ", Resp:" << std::setw(4) << peak_resp << "%"
-                  << ", L2:" << std::setw(4) << peak_l2 << "%"
-                  << ", L3:" << std::setw(4) << peak_l3 << "%   |" << std::endl;
+                  << ", MD:" << std::setw(4) << peak_md << "%             |" << std::endl;
 
         // Target latency: durable_lat = 1000 ms = 1,000,000 us
         double target_lat_us = 1000.0 * 1000.0;
@@ -532,8 +521,7 @@ private:
     // Observability observers
     std::unique_ptr<Exchange::SHMObserver> req_observer_;
     std::unique_ptr<Exchange::SHMObserver> resp_observer_;
-    std::unique_ptr<Exchange::SHMObserver> l2_observer_;
-    std::unique_ptr<Exchange::SHMObserver> l3_observer_;
+    std::unique_ptr<Exchange::SHMObserver> md_observer_;
 
     double tsc_hz_ = 0.0;
 
@@ -545,8 +533,7 @@ private:
     std::vector<double> step_rtts_;
     double peak_req_ratio_ = 0.0;
     double peak_resp_ratio_ = 0.0;
-    double peak_l2_ratio_ = 0.0;
-    double peak_l3_ratio_ = 0.0;
+    double peak_md_ratio_ = 0.0;
 
     // General stats counters
     std::atomic<uint64_t> ack_count_{0};

@@ -17,8 +17,7 @@ namespace Exchange {
 
 AlgoTradingClient::AlgoTradingClient(const Config& config) : config_(config) {
     mgmt_client_ = SimpleWSClient::create(config_.host, config_.mgmt_port);
-    l2_client_ = SimpleWSClient::create(config_.host, config_.l2_port);
-    l3_client_ = SimpleWSClient::create(config_.host, config_.l3_port);
+    md_client_ = SimpleWSClient::create(config_.host, config_.l2_port);
 }
 
 AlgoTradingClient::~AlgoTradingClient() {
@@ -167,12 +166,8 @@ int AlgoTradingClient::run() {
         std::cerr << "Failed to connect to Management port " << config_.mgmt_port << std::endl;
         return 1;
     }
-    if (!l2_client_->connect()) {
-        std::cerr << "Failed to connect to L2 port " << config_.l2_port << std::endl;
-        return 1;
-    }
-    if (!l3_client_->connect()) {
-        std::cerr << "Failed to connect to L3 port " << config_.l3_port << std::endl;
+    if (!md_client_->connect()) {
+        std::cerr << "Failed to connect to Market Data port " << config_.l2_port << std::endl;
         return 1;
     }
 
@@ -195,26 +190,26 @@ int AlgoTradingClient::run() {
         }
     });
 
-    l2_client_->run_async([this](const void* data, size_t size) {
+    md_client_->run_async([this](const void* data, size_t size) {
         (void)size;
-        auto update = flatbuffers::GetRoot<L2Update>(data);
-        std::string err;
-        if (update->side() != Side_None && update->p() != 0 && !validate_price(update->symbol_id(), update->p(), err)) {
-            std::cerr << "[AlgoTradingClient] ERROR: L2 Update has invalid price: " << err << std::endl;
-            throw std::runtime_error("L2 Update has invalid price: " + err);
+        auto md_update = flatbuffers::GetRoot<MarketDataUpdate>(data);
+        if (md_update->data_type() == MarketDataUpdateData_L2Update) {
+            auto update = md_update->data_as_L2Update();
+            std::string err;
+            if (update->side() != Side_None && update->p() != 0 && !validate_price(update->symbol_id(), update->p(), err)) {
+                std::cerr << "[AlgoTradingClient] ERROR: L2 Update has invalid price: " << err << std::endl;
+                throw std::runtime_error("L2 Update has invalid price: " + err);
+            }
+            on_l2_update(update);
+        } else if (md_update->data_type() == MarketDataUpdateData_L3Update) {
+            auto update = md_update->data_as_L3Update();
+            std::string err;
+            if (update->side() != Side_None && update->p() != 0 && !validate_price(update->symbol_id(), update->p(), err)) {
+                std::cerr << "[AlgoTradingClient] ERROR: L3 Update has invalid price: " << err << std::endl;
+                throw std::runtime_error("L3 Update has invalid price: " + err);
+            }
+            on_l3_update(update);
         }
-        on_l2_update(update);
-    });
-
-    l3_client_->run_async([this](const void* data, size_t size) {
-        (void)size;
-        auto update = flatbuffers::GetRoot<L3Update>(data);
-        std::string err;
-        if (update->side() != Side_None && update->p() != 0 && !validate_price(update->symbol_id(), update->p(), err)) {
-            std::cerr << "[AlgoTradingClient] ERROR: L3 Update has invalid price: " << err << std::endl;
-            throw std::runtime_error("L3 Update has invalid price: " + err);
-        }
-        on_l3_update(update);
     });
 
     // Subscriptions
@@ -225,14 +220,14 @@ int AlgoTradingClient::run() {
             flatbuffers::FlatBufferBuilder fbb(128);
             auto req = CreateMarketDataRequest(fbb, sym, MDType_L2, SubType_subscribe);
             fbb.Finish(req);
-            l2_client_->send(fbb.GetBufferPointer(), fbb.GetSize());
+            md_client_->send(fbb.GetBufferPointer(), fbb.GetSize());
         }
         // L3 Subscription
         {
             flatbuffers::FlatBufferBuilder fbb(128);
             auto req = CreateMarketDataRequest(fbb, sym, MDType_L3, SubType_subscribe);
             fbb.Finish(req);
-            l3_client_->send(fbb.GetBufferPointer(), fbb.GetSize());
+            md_client_->send(fbb.GetBufferPointer(), fbb.GetSize());
         }
     }
 
@@ -246,8 +241,7 @@ int AlgoTradingClient::run() {
 void AlgoTradingClient::stop() {
     running_ = false;
     if (mgmt_client_) mgmt_client_->stop();
-    if (l2_client_) l2_client_->stop();
-    if (l3_client_) l3_client_->stop();
+    if (md_client_) md_client_->stop();
 }
 
 } // namespace Exchange

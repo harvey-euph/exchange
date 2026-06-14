@@ -64,8 +64,7 @@ sleep 1
 # Grant read/write permissions on the created shared memory segments to allow client agents to connect
 $SUDO_CMD chmod 666 /dev/shm/ORDER_REQUEST* \
                /dev/shm/ORDER_RESPONSE \
-               /dev/shm/L2_UPDATE_RING \
-               /dev/shm/L3_UPDATE_RING \
+               /dev/shm/MARKET_DATA_RING \
                /dev/shm/EXCHANGE_TELEMETRY \
                /dev/shm/*TELEMETRY 2>/dev/null || true
 

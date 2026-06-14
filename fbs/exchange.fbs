@@ -120,6 +120,16 @@ table MarketDataRequest {
     sub_type: SubType;
 }
 
+union MarketDataUpdateData {
+    L2Update,
+    L3Update
+}
+
+table MarketDataUpdate {
+    data: MarketDataUpdateData;
+}
+
+root_type MarketDataUpdate;
 root_type OrderRequest;
 root_type OrderResponse;
 root_type ClientRequest;

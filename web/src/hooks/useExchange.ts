@@ -20,6 +20,8 @@ import { MarketDataRequest } from '../fbs/exchange/market-data-request';
 import { SymbolInfo } from '../fbs/exchange/symbol-info';
 import { MDType } from '../fbs/exchange/mdtype';
 import { SubType } from '../fbs/exchange/sub-type';
+import { MarketDataUpdate } from '../fbs/exchange/market-data-update';
+import { MarketDataUpdateData } from '../fbs/exchange/market-data-update-data';
 
 /**
  * Simple DJB2-like hash for mapping alphanumeric strings to uint32
@@ -484,8 +486,8 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
     }
     if (l2WsRef.current) l2WsRef.current.close();
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${protocol}//${window.location.host}/ws-l2`;
-    addL2Log(`Connecting to L2 WS (9002)...`);
+    const url = `${protocol}//${window.location.host}/marketdata`;
+    addL2Log(`Connecting to Market Data WS (9002)...`);
     const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     l2WsRef.current = ws;
@@ -522,7 +524,10 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
       try {
         const buf = new Uint8Array(event.data);
         const bb = new flatbuffers.ByteBuffer(buf);
-        const l2Update = L2Update.getRootAsL2Update(bb);
+        const update = MarketDataUpdate.getRootAsMarketDataUpdate(bb);
+        if (update.dataType() !== MarketDataUpdateData.L2Update) return;
+        const l2Update = update.data(new L2Update()) as L2Update;
+        if (!l2Update) return;
         const side = l2Update.side(); 
         const p = l2Update.p(); 
         const q = l2Update.q();

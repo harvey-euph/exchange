@@ -20,8 +20,7 @@ tmux kill-session -t "exchange" 2>/dev/null || true
 echo "=== Cleaning up shared memory files ==="
 $SUDO_CMD rm -f /dev/shm/ORDER_REQUEST \
         /dev/shm/ORDER_RESPONSE \
-        /dev/shm/L2_UPDATE_RING \
-        /dev/shm/L3_UPDATE_RING \
+        /dev/shm/MARKET_DATA_RING \
         /dev/shm/EXCHANGE_TELEMETRY \
         /dev/shm/*TELEMETRY 2>/dev/null || true
 

@@ -4,7 +4,6 @@
 #include <atomic>
 #include <cstdint>
 #include <unordered_map>
-#include "L2Updater.hpp"
 #include "L3Updater.hpp"
 #include "fbs/exchange_generated.h"
 #include "ring/SHMRingBuffer.hpp"
@@ -68,7 +67,6 @@ private:
     const size_t  max_price_levels_;   // price_array_ 大小
     SHMRingBuffer* response_ring_;
     OrderResponseT resp;
-    L2Updater l2;
     L3Updater l3;
 
     size_t price_to_index(const int64_t price) const {

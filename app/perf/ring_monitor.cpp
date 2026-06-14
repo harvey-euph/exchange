@@ -24,8 +24,7 @@ int main()
     std::vector<std::string> ring_names = {
         ORDER_REQUEST,
         ORDER_RESPONSE,
-        L2_UPDATE_RING,
-        L3_UPDATE_RING
+        MARKET_DATA_RING
     };
 
     std::vector<RingInfo> rings;
