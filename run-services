@@ -28,6 +28,58 @@ fi
 
 echo "Detected CPU cores: $NUM_CORES. Applying Tier $TIER: $TIER_NAME configuration."
 
+ASKPASS_PATH="/dev/shm/exchange_askpass_${USER}.sh"
+SUDO_CMD="sudo"
+
+# Setup askpass if sudo is needed (Tier 2 or 3)
+if [ "$TIER" -gt 1 ]; then
+    # Helper to check if sudo requires password inside tmux
+    needs_sudo_auth() {
+        if [ "$EUID" -eq 0 ]; then
+            return 1
+        fi
+        # If we already have a valid askpass set up, we don't need to prompt again
+        if [ -n "$SUDO_ASKPASS" ] && [ -x "$SUDO_ASKPASS" ] && SUDO_ASKPASS="$SUDO_ASKPASS" sudo -A true 2>/dev/null; then
+            return 1
+        fi
+        if [ -x "$ASKPASS_PATH" ] && SUDO_ASKPASS="$ASKPASS_PATH" sudo -A true 2>/dev/null; then
+            export SUDO_ASKPASS="$ASKPASS_PATH"
+            return 1
+        fi
+        # Check if passwordless sudo is already available in a new tmux session
+        rm -f /dev/shm/sudo_ok
+        tmux new-session -d -s check_sudo_session 'sudo -n true 2>/dev/null && touch /dev/shm/sudo_ok' 2>/dev/null
+        sleep 0.2
+        tmux kill-session -t check_sudo_session 2>/dev/null
+        if [ -f /dev/shm/sudo_ok ]; then
+            rm -f /dev/shm/sudo_ok
+            return 1
+        fi
+        return 0
+    }
+
+    if needs_sudo_auth; then
+        echo "This script requires sudo privileges to set real-time priority or modify CPU nice values."
+        echo -n "[sudo] password for $USER: "
+        read -s SUDO_PASS
+        echo ""
+        if ! echo "$SUDO_PASS" | sudo -S true 2>/dev/null; then
+            echo "Error: Invalid sudo password."
+            exit 1
+        fi
+        cat <<EOF > "$ASKPASS_PATH"
+#!/bin/bash
+echo "$SUDO_PASS"
+EOF
+        chmod 700 "$ASKPASS_PATH"
+        export SUDO_ASKPASS="$ASKPASS_PATH"
+    fi
+
+    if [ -n "$SUDO_ASKPASS" ]; then
+        SUDO_CMD="sudo -A"
+    fi
+fi
+
 # Find all executable services dynamically, verifying they correspond to source files
 SERVICES=()
 for src in "$PROJECT_ROOT/app/services"/*.cpp; do
@@ -67,7 +119,7 @@ get_run_cmd() {
             "public-data")     main_core="6" ;;
         esac
         if [ -n "$main_core" ]; then
-            echo "sudo MAIN_CORE=$main_core nice -n -20 $exe_path"
+            echo "$SUDO_CMD MAIN_CORE=$main_core nice -n -20 $exe_path"
         else
             echo "$exe_path"
         fi
@@ -93,7 +145,7 @@ get_run_cmd() {
         fi
         
         if [ -n "$env_vars" ]; then
-            echo "sudo $env_vars chrt -f 99 $exe_path"
+            echo "$SUDO_CMD $env_vars chrt -f 99 $exe_path"
         else
             echo "$exe_path"
         fi
@@ -108,7 +160,7 @@ first_name=$(basename "$first_exe")
 log="$LOG_DIR/${first_name}.log"
 first_run_cmd=$(get_run_cmd "$first_exe" "$first_name")
 
-tmux new-session -d -s "$SESSION" -n "$first_name" "bash -c 'while true; do echo \"--- Starting $first_name ---\"; $first_run_cmd 2>&1 | tee -a $log; echo \"--- $first_name crashed, restarting in 2s ---\"; sleep 2; done'"
+tmux new-session -d -s "$SESSION" -n "$first_name" "SUDO_ASKPASS='$SUDO_ASKPASS' bash -c 'while true; do echo \"--- Starting $first_name ---\"; $first_run_cmd 2>&1 | tee -a $log; echo \"--- $first_name crashed, restarting in 2s ---\"; sleep 2; done'"
 
 # Configure status bar for help
 tmux set-option -t "$SESSION" status-bg black
@@ -126,7 +178,7 @@ for ((i=1; i<${#SERVICES[@]}; i++)); do
     run_cmd=$(get_run_cmd "$exe" "$name")
     
     # Run the service in a loop for health check/auto-restart
-    tmux new-window -t "$SESSION" -n "$name" "bash -c 'while true; do echo \"--- Starting $name ---\"; $run_cmd 2>&1 | tee -a $log; echo \"--- $name crashed, restarting in 2s ---\"; sleep 2; done'"
+    tmux new-window -t "$SESSION" -n "$name" "SUDO_ASKPASS='$SUDO_ASKPASS' bash -c 'while true; do echo \"--- Starting $name ---\"; $run_cmd 2>&1 | tee -a $log; echo \"--- $name crashed, restarting in 2s ---\"; sleep 2; done'"
 done
 
 # Select the first window by default

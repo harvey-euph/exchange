@@ -10,6 +10,50 @@ mkdir -p "$LOG_DIR"
 # First stop everything to ensure clean state
 "$PROJECT_ROOT/kill-all"
 
+# Setup askpass if needed
+ASKPASS_PATH="/dev/shm/exchange_askpass_${USER}.sh"
+SUDO_CMD="sudo"
+
+needs_sudo_auth() {
+    if [ "$EUID" -eq 0 ]; then
+        return 1
+    fi
+    if [ -x "$ASKPASS_PATH" ] && SUDO_ASKPASS="$ASKPASS_PATH" sudo -A true 2>/dev/null; then
+        export SUDO_ASKPASS="$ASKPASS_PATH"
+        return 1
+    fi
+    rm -f /dev/shm/sudo_ok
+    tmux new-session -d -s check_sudo_session 'sudo -n true 2>/dev/null && touch /dev/shm/sudo_ok' 2>/dev/null
+    sleep 0.2
+    tmux kill-session -t check_sudo_session 2>/dev/null
+    if [ -f /dev/shm/sudo_ok ]; then
+        rm -f /dev/shm/sudo_ok
+        return 1
+    fi
+    return 0
+}
+
+if needs_sudo_auth; then
+    echo "This script requires sudo privileges to set real-time priority or modify CPU nice values."
+    echo -n "[sudo] password for $USER: "
+    read -s SUDO_PASS
+    echo ""
+    if ! echo "$SUDO_PASS" | sudo -S true 2>/dev/null; then
+        echo "Error: Invalid sudo password."
+        exit 1
+    fi
+    cat <<EOF > "$ASKPASS_PATH"
+#!/bin/bash
+echo "$SUDO_PASS"
+EOF
+    chmod 700 "$ASKPASS_PATH"
+    export SUDO_ASKPASS="$ASKPASS_PATH"
+fi
+
+if [ -n "$SUDO_ASKPASS" ]; then
+    SUDO_CMD="sudo -A"
+fi
+
 echo ""
 echo "=== Starting Exchange Core Services ==="
 "$PROJECT_ROOT/run-services"
@@ -18,7 +62,7 @@ echo "Waiting 1 second for services to initialize..."
 sleep 1
 
 # Grant read/write permissions on the created shared memory segments to allow client agents to connect
-sudo chmod 666 /dev/shm/ORDER_REQUEST* \
+$SUDO_CMD chmod 666 /dev/shm/ORDER_REQUEST* \
                /dev/shm/ORDER_RESPONSE \
                /dev/shm/L2_UPDATE_RING \
                /dev/shm/L3_UPDATE_RING \
