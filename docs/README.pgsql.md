@@ -171,11 +171,12 @@ An abstract base class `ClientDatabase` allows hot-swapping between `InMemoryCli
 class ClientDatabase {
 public:
     virtual ~ClientDatabase() = default;
-    virtual void addPendingResponse(uint32_t client_id, const uint8_t* data, size_t size) = 0;
-    virtual std::vector<PendingResponse> popPendingResponses(uint32_t client_id) = 0;
+    virtual void addPendingResponse(uint32_t client_id, const OrderResponseT& resp) = 0;
+    virtual std::vector<OrderResponseT> popPendingResponses(uint32_t client_id) = 0;
     virtual int64_t getPosition(uint32_t client_id, uint32_t symbol_id) = 0;
-    virtual void updatePosition(uint32_t client_id, uint32_t symbol_id, int64_t delta) = 0;
-    virtual void addOrUpdateOpenOrder(uint32_t client_id, uint64_t order_id, const uint8_t* data, size_t size) = 0;
+    virtual std::map<uint32_t, int64_t> getAllPositions(uint32_t client_id) = 0;
+    virtual void updatePosition(const OrderResponseT* resp) = 0;
+    virtual void addOrUpdateOpenOrder(const OrderResponseT* resp) = 0;
     virtual void removeOpenOrder(uint32_t client_id, uint64_t order_id) = 0;
 };
 ```

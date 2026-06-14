@@ -56,11 +56,12 @@ void ClientManager::handle_client_subscription(WSClientPtr client, uint32_t clie
         auto pending = db_->popPendingResponses(client_id);
         std::cout << "[ClientManager] Sending " << pending.size() << " pending responses." << std::endl;
         for (auto& resp : pending) {
-            client->send(resp.data.data(), resp.data.size());
-            auto client_resp = flatbuffers::GetRoot<ClientResponse>(resp.data.data());
-            if (client_resp->data_type() == ClientResponseData_OrderResponse) {
-                logOrderResponse(client_resp->data_as_OrderResponse(), "[ClientManager] Resending Pending:");
-            }
+            flatbuffers::FlatBufferBuilder fbb(256);
+            auto resp_offset = OrderResponse::Pack(fbb, &resp);
+            auto client_resp = CreateClientResponse(fbb, ClientResponseData_OrderResponse, resp_offset.Union());
+            fbb.Finish(client_resp);
+            client->send(fbb.GetBufferPointer(), fbb.GetSize());
+            logOrderResponse(flatbuffers::GetRoot<ClientResponse>(fbb.GetBufferPointer())->data_as_OrderResponse(), "[ClientManager] Resending Pending:");
         }
 
         // 2. Send current open order as OrderResponse with ExecType=OrderStatus
@@ -147,8 +148,6 @@ void ClientManager::process_client_request(WSClientPtr client, const void* data,
     switch (type) {
         case ClientRequestData_OrderRequest: {
             auto order_req = request->data_as_OrderRequest();
-            
-            // logOrderRequest(order_req, "[ClientManager] Received Order Request:");
 
             flatbuffers::FlatBufferBuilder fbb(256);
             auto or_offset = CreateOrderRequest(fbb, 
@@ -211,7 +210,7 @@ void ClientManager::handle_execution_response(const OrderResponseT* resp)
 }
 
 int ClientManager::poll_client() {
-    return ws_adaptor_->poll() > 0 ? 1 : 0;
+    return ws_adaptor_->poll();
 }
 
 int ClientManager::poll_server() {

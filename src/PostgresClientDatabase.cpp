@@ -18,13 +18,15 @@ PostgresClientDatabase::PostgresClientDatabase(const std::string& conn_str)
 
 PostgresClientDatabase::~PostgresClientDatabase() = default;
 
-void PostgresClientDatabase::addPendingResponse(uint32_t client_id, const uint8_t* data, size_t size) {
+void PostgresClientDatabase::addPendingResponse(uint32_t client_id, const OrderResponseT& resp) {
     std::lock_guard<std::mutex> lock(mutex_);
-    uint64_t exec_id = 0;
-    auto resp = flatbuffers::GetRoot<ClientResponse>(data);
-    if (resp->data_type() == ClientResponseData_OrderResponse) {
-        exec_id = resp->data_as_OrderResponse()->exec_id();
-    }
+    uint64_t exec_id = resp.exec_id;
+    
+    flatbuffers::FlatBufferBuilder fbb(256);
+    auto resp_offset = OrderResponse::Pack(fbb, &resp);
+    auto client_resp = CreateClientResponse(fbb, ClientResponseData_OrderResponse, resp_offset.Union());
+    fbb.Finish(client_resp);
+
     reconnect_if_needed();
     pqxx::work w(*conn_);
     w.exec(
@@ -33,15 +35,15 @@ void PostgresClientDatabase::addPendingResponse(uint32_t client_id, const uint8_
     );
     w.exec(
         "INSERT INTO pending_responses (client_id, exec_id, serialized_data) VALUES ($1, $2, $3)",
-        pqxx::params{client_id, exec_id, pqxx::bytes_view{reinterpret_cast<const std::byte*>(data), size}}
+        pqxx::params{client_id, exec_id, pqxx::bytes_view{reinterpret_cast<const std::byte*>(fbb.GetBufferPointer()), fbb.GetSize()}}
     );
     w.commit();
 }
 
-std::vector<PendingResponse> PostgresClientDatabase::popPendingResponses(uint32_t client_id) {
+std::vector<OrderResponseT> PostgresClientDatabase::popPendingResponses(uint32_t client_id) {
     std::lock_guard<std::mutex> lock(mutex_);
     reconnect_if_needed();
-    std::vector<PendingResponse> result;
+    std::vector<OrderResponseT> result;
     pqxx::work w(*conn_);
     pqxx::result r = w.exec(
         "SELECT serialized_data FROM pending_responses WHERE client_id = $1 ORDER BY response_id ASC",
@@ -52,13 +54,12 @@ std::vector<PendingResponse> PostgresClientDatabase::popPendingResponses(uint32_
     
     for (auto const& row : r) {
         auto bytes = row[0].as<pqxx::bytes>();
-
-        std::vector<uint8_t> data(
-            reinterpret_cast<const uint8_t*>(bytes.data()),
-            reinterpret_cast<const uint8_t*>(bytes.data()) + bytes.size()
-        );
-
-        result.push_back({std::move(data)});
+        auto client_resp = flatbuffers::GetRoot<ClientResponse>(bytes.data());
+        if (client_resp->data_type() == ClientResponseData_OrderResponse) {
+            OrderResponseT resp;
+            client_resp->data_as_OrderResponse()->UnPackTo(&resp);
+            result.push_back(std::move(resp));
+        }
     }
     return result;
 }
@@ -98,9 +99,23 @@ std::map<uint32_t, int64_t> PostgresClientDatabase::getAllPositions(uint32_t cli
     return result;
 }
 
-void PostgresClientDatabase::updatePosition(uint32_t client_id, uint32_t symbol_id, int64_t delta) {
+void PostgresClientDatabase::updatePosition(const OrderResponseT* resp) {
     std::lock_guard<std::mutex> lock(mutex_);
     reconnect_if_needed();
+    
+    uint32_t client_id = resp->client_id;
+    uint32_t symbol_id = resp->symbol_id;
+    int64_t cost = static_cast<int64_t>(resp->p * resp->q);
+    int64_t asset_delta = 0;
+    int64_t cash_delta = 0;
+    if (resp->side == Side_Buy) {
+        asset_delta = static_cast<int64_t>(resp->q);
+        cash_delta = -cost;
+    } else {
+        asset_delta = -static_cast<int64_t>(resp->q);
+        cash_delta = cost;
+    }
+
     pqxx::work w(*conn_);
     std::string username = "client_" + std::to_string(client_id);
 
@@ -110,29 +125,32 @@ void PostgresClientDatabase::updatePosition(uint32_t client_id, uint32_t symbol_
         pqxx::params{client_id, username}
     );
 
-    int64_t initial_pos = (symbol_id == 0) ? 1000000 : 0;
-
+    // Update Cash position (symbol_id = 0, initial_pos = 1,000,000)
     w.exec(
         "INSERT INTO positions (client_id, symbol_id, position) "
-        "VALUES ($1, $2, $3) "
+        "VALUES ($1, 0, 1000000 + $2) "
         "ON CONFLICT (client_id, symbol_id) "
-        "DO UPDATE SET position = positions.position + $4",
-        pqxx::params{client_id, symbol_id, initial_pos + delta, delta}
+        "DO UPDATE SET position = positions.position + $3",
+        pqxx::params{client_id, cash_delta, cash_delta}
     );
+
+    // Update Asset position (symbol_id, initial_pos = 0)
+    if (symbol_id != 0) {
+        w.exec(
+            "INSERT INTO positions (client_id, symbol_id, position) "
+            "VALUES ($1, $2, $3) "
+            "ON CONFLICT (client_id, symbol_id) "
+            "DO UPDATE SET position = positions.position + $4",
+            pqxx::params{client_id, symbol_id, asset_delta, asset_delta}
+        );
+    }
     w.commit();
 }
 
 void PostgresClientDatabase::update_on_execution(const OrderResponseT* resp, bool not_sent) {
     uint32_t client_id = resp->client_id;
     if ((EXEC_MASK_POSITION_UPDATE >> resp->exec_type) & 1) {
-        int64_t cost = static_cast<int64_t>(resp->p * resp->q);
-        if (resp->side == Side_Buy) {
-            updatePosition(client_id, 0, -cost);
-            updatePosition(client_id, resp->symbol_id, static_cast<int64_t>(resp->q));
-        } else {
-            updatePosition(client_id, 0, cost);
-            updatePosition(client_id, resp->symbol_id, -static_cast<int64_t>(resp->q));
-        }
+        updatePosition(resp);
     }
     if ((EXEC_MASK_UPSERT_OPEN >> resp->exec_type) & 1) {
         addOrUpdateOpenOrder(resp);
@@ -140,11 +158,7 @@ void PostgresClientDatabase::update_on_execution(const OrderResponseT* resp, boo
         removeOpenOrder(client_id, resp->order_id);
     }
     if (not_sent) {
-        flatbuffers::FlatBufferBuilder fbb(256);
-        auto resp_offset = OrderResponse::Pack(fbb, resp);
-        auto client_resp = CreateClientResponse(fbb, ClientResponseData_OrderResponse, resp_offset.Union());
-        fbb.Finish(client_resp);
-        addPendingResponse(client_id, fbb.GetBufferPointer(), fbb.GetSize());
+        addPendingResponse(client_id, *resp);
     }
 }
 

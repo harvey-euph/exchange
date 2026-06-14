@@ -129,22 +129,18 @@ void OrderBook::handleNewOrder(const OrderRequest* req, bool report_ack)
             
             {
                 static thread_local std::mt19937_64 gen(std::random_device{}());
-                uint64_t rand_exec_id = gen();
+                uint64_t exec_id = gen();
+                const Side maker_side = static_cast<Side>(1^side_int);
                 sendResponse(
                     taker->qty_remaining == 0 ? ExecType_Fill : ExecType_PartialFill,
-                    taker->order_id, taker->client_id, rand_exec_id, req->side(), p, qty_fill);
-                const Side maker_side = static_cast<Side>(1 - static_cast<int>(req->side()));
+                    taker->order_id, taker->client_id, exec_id, req->side(), p, qty_fill);
                 sendResponse(
                     maker->qty_remaining == 0 ? ExecType_Fill : ExecType_PartialFill,
-                    maker->order_id, maker->client_id, rand_exec_id, maker_side, p, qty_fill);
+                    maker->order_id, maker->client_id, exec_id, maker_side, p, qty_fill);
             }
             
             l3.update(symbol_id_, maker->qty_remaining == 0 ? ExecType_Fill : ExecType_PartialFill,
                 maker->order_id, (Exchange::Side)(1^side_int), p, qty_fill
-            );
-            
-            l3.update(symbol_id_, taker->qty_remaining == 0 ? ExecType_Fill : ExecType_PartialFill,
-                taker->order_id, (Exchange::Side)side_int, p, qty_fill
             );
             
             if (maker->qty_remaining) continue;
@@ -373,7 +369,6 @@ void OrderBook::sendResponse(ExecType exec_type, uint64_t order_id, uint32_t cli
                               RejectCode reject_code)
 {
     if (!response_ring_) return;
-    DTRACE_PROBE1(exchange, ob_resp_enqueue, exec_id);
     resp.exec_type = exec_type;
     resp.order_id = order_id;
     resp.client_id = client_id;
@@ -382,6 +377,7 @@ void OrderBook::sendResponse(ExecType exec_type, uint64_t order_id, uint32_t cli
     resp.p = p;
     resp.q = q;
     resp.reject_code = reject_code;
-
+    
+    DTRACE_PROBE1(exchange, ob_resp_enqueue, exec_id);
     response_ring_->enqueue(&resp, sizeof(OrderResponseT));
 }

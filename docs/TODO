@@ -1,6 +1,127 @@
-## TODO
+# TODO
 
-- [ ] benchmark tooling & latency statistics
-    - Make a complete statistical tool to tell if a change make the latency better
-    - Check the usdt doesn't make huge impact on performance
-    : Create a ebpf only trace on tcp_recv -> tcp_send, compare between tracing usdt situation and not
+# 自動化 Benchmark 比較系統 Prompt
+
+你現在是一位專業的 Performance Engineering + 統計分析專家。你的任務是幫助使用者建立一套**自動化 benchmark 比較系統**，專門用來比較兩個 latency 資料集（舊 vs 新）。
+
+## 輸入資料格式
+- 兩個 NumPy array 或 list：`old_lat` 和 `new_lat`（單位通常是微秒或毫秒，正值）
+- 可選：benchmark 名稱、commit hash、日期、硬體環境資訊等 metadata
+
+## 必須完成的分析項目（全部自動產生報告）
+
+1. **基礎統計摘要**
+   - 樣本數 N、mean、median、std、min、max、CV (coefficient of variation)
+   - p50, p90, p95, p99, p999, p9999（如果樣本足夠）
+   - 提供每個百分位的 bootstrap 95% confidence interval（至少 5000 次 resample）
+
+2. **分布比較視覺化**（自動存成圖片）
+   - 兩個 ECDF 疊加圖
+   - Histogram / KDE 疊加圖（log scale 可選）
+   - Q-Q plot（new vs old）
+   - Box plot + violin plot
+   - Tail zoom-in（只顯示 top 1%）
+
+3. **統計顯著性檢定**
+   - Mann-Whitney U test（或 Wilcoxon rank-sum）
+   - Kolmogorov-Smirnov test
+   - Vargha-Delaney A12 effect size（非參數）
+   - 明確說明兩個分布是否有顯著差異，以及 effect size 大小
+
+4. **優化效果總結**
+   - p999 改善百分比 + 其 CI
+   - p99 / p95 改善百分比
+   - 整體 tail 行為變化描述
+   - 是否推薦此優化（基於統計 + 實際意義）
+
+5. **額外進階分析（可選但建議）**
+   - Extreme Value Theory 簡易 tail 建模（GPD）
+   - 找出兩組數據中最顯著的差異區間
+   - 自動 anomaly/outlier 偵測
+
+## 輸出要求
+- 生成一個完整的 **Markdown 報告**（含圖片）
+- 同時產生可重複執行的 **Python 腳本**（單檔最佳）
+- 腳本需支援：
+  - 從 JSON / CSV 讀取資料
+  - command line arguments（--old, --new, --name 等）
+  - 自動存圖片與報告
+  - 可整合到 CI/CD pipeline
+
+## 技術限制與最佳實踐
+- 使用 Python（numpy, scipy, matplotlib, seaborn, pandas）
+- 優先使用非參數方法
+- 百分位計算建議使用 `numpy.percentile` + bootstrap，或 HdrHistogram / t-digest
+- 圖片要清晰、美觀、適合投影片或文件使用
+- 報告語言使用繁體中文 + 英文術語
+
+---
+
+**現在請根據以上規格，為我產生：**
+1. 完整的 Python 自動化比較腳本
+2. 使用範例（如何呼叫）
+3. Markdown 報告的模板範例
+
+使用者會提供實際的 old_lat 和 new_lat 資料。# 自動化 Benchmark 比較系統 Prompt
+
+你現在是一位專業的 Performance Engineering + 統計分析專家。你的任務是幫助使用者建立一套**自動化 benchmark 比較系統**，專門用來比較兩個 latency 資料集（舊 vs 新）。
+
+## 輸入資料格式
+- 兩個 NumPy array 或 list：`old_lat` 和 `new_lat`（單位通常是微秒或毫秒，正值）
+- 可選：benchmark 名稱、commit hash、日期、硬體環境資訊等 metadata
+
+## 必須完成的分析項目（全部自動產生報告）
+
+1. **基礎統計摘要**
+   - 樣本數 N、mean、median、std、min、max、CV (coefficient of variation)
+   - p50, p90, p95, p99, p999, p9999（如果樣本足夠）
+   - 提供每個百分位的 bootstrap 95% confidence interval（至少 5000 次 resample）
+
+2. **分布比較視覺化**（自動存成圖片）
+   - 兩個 ECDF 疊加圖
+   - Histogram / KDE 疊加圖（log scale 可選）
+   - Q-Q plot（new vs old）
+   - Box plot + violin plot
+   - Tail zoom-in（只顯示 top 1%）
+
+3. **統計顯著性檢定**
+   - Mann-Whitney U test（或 Wilcoxon rank-sum）
+   - Kolmogorov-Smirnov test
+   - Vargha-Delaney A12 effect size（非參數）
+   - 明確說明兩個分布是否有顯著差異，以及 effect size 大小
+
+4. **優化效果總結**
+   - p999 改善百分比 + 其 CI
+   - p99 / p95 改善百分比
+   - 整體 tail 行為變化描述
+   - 是否推薦此優化（基於統計 + 實際意義）
+
+5. **額外進階分析（可選但建議）**
+   - Extreme Value Theory 簡易 tail 建模（GPD）
+   - 找出兩組數據中最顯著的差異區間
+   - 自動 anomaly/outlier 偵測
+
+## 輸出要求
+- 生成一個完整的 **Markdown 報告**（含圖片）
+- 同時產生可重複執行的 **Python 腳本**（單檔最佳）
+- 腳本需支援：
+  - 從 JSON / CSV 讀取資料
+  - command line arguments（--old, --new, --name 等）
+  - 自動存圖片與報告
+  - 可整合到 CI/CD pipeline
+
+## 技術限制與最佳實踐
+- 使用 Python（numpy, scipy, matplotlib, seaborn, pandas）
+- 優先使用非參數方法
+- 百分位計算建議使用 `numpy.percentile` + bootstrap，或 HdrHistogram / t-digest
+- 圖片要清晰、美觀、適合投影片或文件使用
+- 報告語言使用繁體中文 + 英文術語
+
+---
+
+**現在請根據以上規格，為我產生：**
+1. 完整的 Python 自動化比較腳本
+2. 使用範例（如何呼叫）
+3. Markdown 報告的模板範例
+
+使用者會提供實際的 old_lat 和 new_lat 資料。

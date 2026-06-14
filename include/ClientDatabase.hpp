@@ -14,11 +14,6 @@ class connection;
 
 namespace Exchange {
 
-// Represents a serialized response (ClientResponse FlatBuffer)
-struct PendingResponse {
-    std::vector<uint8_t> data;
-};
-
 /**
  * @brief Abstract interface for client data storage.
  * Following the adaptor/interface pattern to allow easy swapping to SQL/other DBs.
@@ -28,13 +23,13 @@ public:
     virtual ~ClientDatabase() = default;
 
     // Unsent OrderResponse lists
-    virtual void addPendingResponse(uint32_t client_id, const uint8_t* data, size_t size) = 0;
-    virtual std::vector<PendingResponse> popPendingResponses(uint32_t client_id) = 0;
+    virtual void addPendingResponse(uint32_t client_id, const OrderResponseT& resp) = 0;
+    virtual std::vector<OrderResponseT> popPendingResponses(uint32_t client_id) = 0;
 
     // Positions
     virtual int64_t getPosition(uint32_t client_id, uint32_t symbol_id) = 0;
     virtual std::map<uint32_t, int64_t> getAllPositions(uint32_t client_id) = 0;
-    virtual void updatePosition(uint32_t client_id, uint32_t symbol_id, int64_t delta) = 0;
+    virtual void updatePosition(const OrderResponseT* resp) = 0;
 
     // Open Orders
     virtual void addOrUpdateOpenOrder(const OrderResponseT* resp) = 0;
@@ -52,16 +47,14 @@ class InMemoryClientDatabase : public ClientDatabase {
 public:
     InMemoryClientDatabase() = default;
 
-    void addPendingResponse(uint32_t client_id, const uint8_t* data, size_t size) override {
-        std::lock_guard<std::mutex> lock(mutex_);
-        pending_responses_[client_id].push_back({std::vector<uint8_t>(data, data + size)});
+    void addPendingResponse(uint32_t client_id, const OrderResponseT& resp) override {
+        pending_responses_[client_id].push_back(resp);
     }
 
-    std::vector<PendingResponse> popPendingResponses(uint32_t client_id) override {
-        std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<OrderResponseT> popPendingResponses(uint32_t client_id) override {
         auto it = pending_responses_.find(client_id);
         if (it != pending_responses_.end()) {
-            std::vector<PendingResponse> res = std::move(it->second);
+            std::vector<OrderResponseT> res = std::move(it->second);
             pending_responses_.erase(it);
             return res;
         }
@@ -69,29 +62,37 @@ public:
     }
 
     int64_t getPosition(uint32_t client_id, uint32_t symbol_id) override {
-        std::lock_guard<std::mutex> lock(mutex_);
         auto& client_pos = get_or_create_client_positions(client_id);
         return client_pos[symbol_id];
     }
 
     std::map<uint32_t, int64_t> getAllPositions(uint32_t client_id) override {
-        std::lock_guard<std::mutex> lock(mutex_);
         return get_or_create_client_positions(client_id);
     }
 
-    void updatePosition(uint32_t client_id, uint32_t symbol_id, int64_t delta) override {
-        std::lock_guard<std::mutex> lock(mutex_);
+    void updatePosition(const OrderResponseT* resp) override {
+        uint32_t client_id = resp->client_id;
+        uint32_t symbol_id = resp->symbol_id;
+        int64_t cost = static_cast<int64_t>(resp->p * resp->q);
+        int64_t asset_delta = 0;
+        int64_t cash_delta = 0;
+        if (resp->side == Side_Buy) {
+            asset_delta = static_cast<int64_t>(resp->q);
+            cash_delta = -cost;
+        } else {
+            asset_delta = -static_cast<int64_t>(resp->q);
+            cash_delta = cost;
+        }
         auto& client_pos = get_or_create_client_positions(client_id);
-        client_pos[symbol_id] += delta;
+        client_pos[symbol_id] += asset_delta;
+        client_pos[0] += cash_delta;
     }
 
     void addOrUpdateOpenOrder(const OrderResponseT* resp) override {
-        std::lock_guard<std::mutex> lock(mutex_);
         open_orders_[resp->client_id][resp->order_id] = *resp;
     }
 
     void removeOpenOrder(uint32_t client_id, uint64_t order_id) override {
-        std::lock_guard<std::mutex> lock(mutex_);
         auto it = open_orders_.find(client_id);
         if (it != open_orders_.end()) {
             it->second.erase(order_id);
@@ -101,14 +102,7 @@ public:
     void update_on_execution(const OrderResponseT* resp, bool not_sent) override {
         uint32_t client_id = resp->client_id;
         if ((EXEC_MASK_POSITION_UPDATE >> resp->exec_type) & 1) {
-            int64_t cost = static_cast<int64_t>(resp->p * resp->q);
-            if (resp->side == Side_Buy) {
-                updatePosition(client_id, 0, -cost);
-                updatePosition(client_id, resp->symbol_id, static_cast<int64_t>(resp->q));
-            } else {
-                updatePosition(client_id, 0, cost);
-                updatePosition(client_id, resp->symbol_id, -static_cast<int64_t>(resp->q));
-            }
+            updatePosition(resp);
         }
         if ((EXEC_MASK_UPSERT_OPEN >> resp->exec_type) & 1) {
             addOrUpdateOpenOrder(resp);
@@ -116,16 +110,11 @@ public:
             removeOpenOrder(client_id, resp->order_id);
         }
         if (not_sent) {
-            flatbuffers::FlatBufferBuilder fbb(256);
-            auto resp_offset = OrderResponse::Pack(fbb, resp);
-            auto client_resp = CreateClientResponse(fbb, ClientResponseData_OrderResponse, resp_offset.Union());
-            fbb.Finish(client_resp);
-            addPendingResponse(client_id, fbb.GetBufferPointer(), fbb.GetSize());
+            addPendingResponse(client_id, *resp);
         }
     }
 
     std::vector<std::vector<uint8_t>> getOpenOrders(uint32_t client_id) override {
-        std::lock_guard<std::mutex> lock(mutex_);
         std::vector<std::vector<uint8_t>> result;
         auto it = open_orders_.find(client_id);
         if (it != open_orders_.end()) {
@@ -152,8 +141,7 @@ private:
         return it->second;
     }
 
-    std::mutex mutex_;
-    std::map<uint32_t, std::vector<PendingResponse>> pending_responses_;
+    std::map<uint32_t, std::vector<OrderResponseT>> pending_responses_;
     std::map<uint32_t, std::map<uint32_t, int64_t>> positions_;
     std::map<uint32_t, std::map<uint64_t, OrderResponseT>> open_orders_;
 };
@@ -163,12 +151,12 @@ public:
     PostgresClientDatabase(const std::string& conn_str);
     ~PostgresClientDatabase() override;
 
-    void addPendingResponse(uint32_t client_id, const uint8_t* data, size_t size) override;
-    std::vector<PendingResponse> popPendingResponses(uint32_t client_id) override;
+    void addPendingResponse(uint32_t client_id, const OrderResponseT& resp) override;
+    std::vector<OrderResponseT> popPendingResponses(uint32_t client_id) override;
 
     int64_t getPosition(uint32_t client_id, uint32_t symbol_id) override;
     std::map<uint32_t, int64_t> getAllPositions(uint32_t client_id) override;
-    void updatePosition(uint32_t client_id, uint32_t symbol_id, int64_t delta) override;
+    void updatePosition(const OrderResponseT* resp) override;
 
     void addOrUpdateOpenOrder(const OrderResponseT* resp) override;
     void removeOpenOrder(uint32_t client_id, uint64_t order_id) override;
