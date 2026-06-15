@@ -83,8 +83,8 @@ echo "Logging stdout to: $LOG_FILE"
 echo "Starting ebpf-msg-flow..."
 sudo ./app/perf/ebpf/ebpf-msg-flow --raw > "$LOG_FILE" &
 EBPF_PID=$!
-echo "Waiting 1 second for ebpf-msg-flow to stabilize..."
-sleep 1
+echo "Waiting 3 seconds for ebpf-msg-flow to stabilize and attach uprobes..."
+sleep 3
 
 # 5. Run benchmark-trader, wait for completion, ignoring output
 echo "Running benchmark-trader..."
