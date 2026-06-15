@@ -38,11 +38,19 @@ jobs:
             }
             trap cleanup EXIT
 
-            # Start the VM
-            echo "Starting vm-benchmark..."
-            gcloud compute instances start vm-benchmark --zone="$ZONE"
-            echo "Waiting 10 seconds for VM to stabilize..."
-            sleep 10
+            # Check if VM is already running
+            STATUS=$(gcloud compute instances describe vm-benchmark --zone="$ZONE" --format="value(status)" | tr -d '\r\n')
+            echo "Current status of vm-benchmark: $STATUS"
+
+            if [ "$STATUS" = "RUNNING" ]; then
+              echo "vm-benchmark is already running. Skipping startup and stabilization wait."
+            else
+              # Start the VM
+              echo "Starting vm-benchmark..."
+              gcloud compute instances start vm-benchmark --zone="$ZONE"
+              echo "Waiting 10 seconds for VM to stabilize..."
+              sleep 10
+            fi
 
             # Define the new branch
             NEW_BRANCH="${{ github.ref_name }}"

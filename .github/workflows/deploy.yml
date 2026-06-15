@@ -54,7 +54,6 @@ jobs:
           port: 22
           script: |
             date >> ~/test_github_cd
-            echo -e "\n" >> ~/test_github_cd
             cd /home/${{ secrets.GCP_VM_USER }}/exchange
             git fetch origin main
             git reset --hard origin/main
