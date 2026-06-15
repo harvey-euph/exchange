@@ -13,9 +13,6 @@ SESSION="exchange_agents"
 
 mkdir -p "$LOG_DIR"
 
-# First stop everything to ensure clean state
-"$PROJECT_ROOT/kill-all"
-
 # Setup askpass if needed
 ASKPASS_PATH="/dev/shm/exchange_askpass_${USER}.sh"
 SUDO_CMD="sudo"

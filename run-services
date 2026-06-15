@@ -16,7 +16,7 @@ mkdir -p "$LOG_DIR"
 # Check if any service is running (either tmux session exists or processes are active)
 if tmux list-sessions -F '#S' 2>/dev/null | grep -q -x "$SESSION" || pgrep -f "build/services/" >/dev/null; then
     echo "One or more core services are already running. Stopping services and cleaning up shared memory..."
-    "$PROJECT_ROOT/kill-all"
+    sudo "$PROJECT_ROOT/kill-all"
 fi
 
 # Check CPU count and set the appropriate Tier
