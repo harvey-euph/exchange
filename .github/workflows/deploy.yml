@@ -58,5 +58,5 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
             make -j$(nproc)
-            ./kill-all
-            ./run-all
+            sudo ./kill-all
+            sudo ./run-all
