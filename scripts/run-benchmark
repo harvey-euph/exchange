@@ -56,9 +56,10 @@ cleanup() {
         sudo ./kill-all || true
     fi
 
-    # Fix log ownership if log file exists
+    # Fix log ownership and permissions if log file exists
     if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
         chown "$RUNNING_USER:$RUNNING_USER" "$LOG_FILE"
+        chmod 666 "$LOG_FILE"
     fi
 }
 trap cleanup EXIT
