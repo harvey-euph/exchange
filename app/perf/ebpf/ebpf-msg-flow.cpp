@@ -184,7 +184,7 @@ int main(int argc, char **argv) {
     }
 
     if (raw_mode) {
-        raw_events.reserve(1000000);
+        raw_events.reserve(500000);
     }
 
     signal(SIGINT, sig_handler);
