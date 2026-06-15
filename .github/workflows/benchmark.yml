@@ -34,27 +34,23 @@ jobs:
             cleanup() {
               echo "Cleaning up: Stopping vm-benchmark..."
               gcloud compute instances stop vm-benchmark --zone="$ZONE" || true
-              rm -f main_benchmark.log new_benchmark.log vm_status.txt
+              rm -f main_benchmark.log new_benchmark.log
             }
             trap cleanup EXIT
 
-            # Check if VM is already running (write to temp file to avoid pipeline issues under set -e)
-            gcloud compute instances describe vm-benchmark --zone="$ZONE" --format="value(status)" > vm_status.txt
-            STATUS=$(cat vm_status.txt | tr -d '\r\n')
-            rm -f vm_status.txt
+            # Check if VM is already running
+            STATUS=$(gcloud compute instances describe vm-benchmark --zone="$ZONE" --format="value(status)" | tr -d '\r\n')
             echo "Current status of vm-benchmark: $STATUS"
 
-            case "$STATUS" in
-              RUNNING)
-                echo "vm-benchmark is already running. Skipping startup and stabilization wait."
-                ;;
-              *)
-                echo "Starting vm-benchmark..."
-                gcloud compute instances start vm-benchmark --zone="$ZONE"
-                echo "Waiting 10 seconds for VM to stabilize..."
-                sleep 10
-                ;;
-            esac
+            if [ "$STATUS" = "RUNNING" ]; then
+              echo "vm-benchmark is already running. Skipping startup and stabilization wait."
+            else
+              # Start the VM
+              echo "Starting vm-benchmark..."
+              gcloud compute instances start vm-benchmark --zone="$ZONE"
+              echo "Waiting 10 seconds for VM to stabilize..."
+              sleep 10
+            fi
 
             # Define the new branch
             NEW_BRANCH="${{ github.ref_name }}"
@@ -62,7 +58,7 @@ jobs:
 
             # Run benchmark on main branch and stream output to console while saving to main_benchmark.log
             echo "Running benchmark on main branch..."
-            gcloud compute ssh vm-benchmark --zone="$ZONE" --quiet --ssh-flag="-o StrictHostKeyChecking=no" --ssh-flag="-o UserKnownHostsFile=/dev/null" << 'EOF' | tee main_benchmark.log
+            gcloud compute ssh vm-benchmark --zone="$ZONE" --quiet --ssh-flag="-o StrictHostKeyChecking=no" --ssh-flag="-o UserKnownHostsFile=/dev/null" --command "
               set -e
               cd ~/exchange-main
               git fetch origin
@@ -71,20 +67,20 @@ jobs:
               git clean -fd
               make clean
               sudo ./scripts/run-benchmark
-            EOF
+            " | tee main_benchmark.log
 
             # Run benchmark on new branch and stream output to console while saving to new_benchmark.log
             echo "Running benchmark on new branch ($NEW_BRANCH)..."
-            gcloud compute ssh vm-benchmark --zone="$ZONE" --quiet --ssh-flag="-o StrictHostKeyChecking=no" --ssh-flag="-o UserKnownHostsFile=/dev/null" << EOF | tee new_benchmark.log
+            gcloud compute ssh vm-benchmark --zone="$ZONE" --quiet --ssh-flag="-o StrictHostKeyChecking=no" --ssh-flag="-o UserKnownHostsFile=/dev/null" --command "
               set -e
               cd ~/exchange-new
-              git fetch origin "$NEW_BRANCH"
-              git checkout -B "$NEW_BRANCH" FETCH_HEAD
+              git fetch origin \"$NEW_BRANCH\"
+              git checkout -B \"$NEW_BRANCH\" FETCH_HEAD
               git reset --hard FETCH_HEAD
               git clean -fd
               make clean
               sudo ./scripts/run-benchmark
-            EOF
+            " | tee new_benchmark.log
 
             # Find and copy logs back to managing plane VM
             echo "Copying logs back to managing plane VM..."
