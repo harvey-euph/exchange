@@ -133,7 +133,7 @@ gcloud compute ssh vm-benchmark \
     git reset --hard FETCH_HEAD
     git clean -fd
 
-    make clean
+    # make clean
 
     sudo ./scripts/run-benchmark
   " | tee new_benchmark.log
