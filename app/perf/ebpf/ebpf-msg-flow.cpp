@@ -231,7 +231,7 @@ int main(int argc, char **argv) {
     }
 
     if (raw_mode) {
-        std::cout << "ExecType,ts0,ts1,ts2,ts3,ts4,ts5,ts6,ts7,ts8\n" << std::flush;
+        std::cout << "ExecType,0-1 lat,1-2 lat,2-3 lat,3-4 lat,4-5 lat,5-6 lat,6-7 lat,7-8 lat\n" << std::flush;
     } else if (!silent) {
         std::cout << "Tracing Message Flow using BPF Skeleton... Ctrl-C to exit.\n";
     }
@@ -251,11 +251,20 @@ int main(int argc, char **argv) {
     if (!raw_mode) {
         print_stats();
     } else {
-        // Output all raw events from memory at once (raw timestamps)
+        // Output all raw events from memory at once
         for (const auto& ev : raw_events) {
+            int64_t lat01 = (ev.ts1 >= ev.ts0) ? (int64_t)(ev.ts1 - ev.ts0) : -1;
+            int64_t lat12 = (ev.ts2 >= ev.ts1) ? (int64_t)(ev.ts2 - ev.ts1) : -1;
+            int64_t lat23 = (ev.ts3 >= ev.ts2) ? (int64_t)(ev.ts3 - ev.ts2) : -1;
+            int64_t lat34 = (ev.ts4 >= ev.ts3) ? (int64_t)(ev.ts4 - ev.ts3) : -1;
+            int64_t lat45 = (ev.ts5 >= ev.ts4) ? (int64_t)(ev.ts5 - ev.ts4) : -1;
+            int64_t lat56 = (ev.ts6 >= ev.ts5) ? (int64_t)(ev.ts6 - ev.ts5) : -1;
+            int64_t lat67 = (ev.ts7 >= ev.ts6) ? (int64_t)(ev.ts7 - ev.ts6) : -1;
+            int64_t lat78 = (ev.ts8 >= ev.ts7) ? (int64_t)(ev.ts8 - ev.ts7) : -1;
+
             std::cout << get_exec_type_name(ev.exec_type) << ","
-                      << ev.ts0 << "," << ev.ts1 << "," << ev.ts2 << "," << ev.ts3 << ","
-                      << ev.ts4 << "," << ev.ts5 << "," << ev.ts6 << "," << ev.ts7 << "," << ev.ts8 << "\n";
+                      << lat01 << "," << lat12 << "," << lat23 << "," << lat34 << ","
+                      << lat45 << "," << lat56 << "," << lat67 << "," << lat78 << "\n";
         }
         std::cout << std::flush;
     }
