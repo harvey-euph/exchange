@@ -168,7 +168,7 @@ private:
             }
             
             auto now = std::chrono::steady_clock::now();
-            if (!silent_ && std::chrono::duration_cast<std::chrono::milliseconds>(now - last_print_time).count() >= 500) {
+            if (!silent_ && std::chrono::duration_cast<std::chrono::milliseconds>(now - last_print_time).count() >= 5000) {
                 size_t recv_new = 0, recv_mod_short = 0, recv_mod_long = 0, recv_can = 0, recv_rej = 0;
                 std::string reject_info;
                 {
