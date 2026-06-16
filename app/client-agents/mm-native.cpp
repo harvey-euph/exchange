@@ -1,5 +1,7 @@
 #include "AlgoTradingClient.hpp"
 #include "SharedMarketData.hpp"
+#include "HttpUtil.hpp"
+#include "JsonUtil.hpp"
 #include <iostream>
 #include <iomanip>
 #include <random>
@@ -194,65 +196,29 @@ private:
     void fetch_binance_price_loop() {
         namespace beast = boost::beast;
         namespace http = beast::http;
-        namespace net = boost::asio;
-        namespace ssl = net::ssl;
-        using tcp = net::ip::tcp;
-
-        net::io_context ioc;
-        ssl::context ctx(ssl::context::tlsv12_client);
-        ctx.set_default_verify_paths();
-        ctx.set_verify_mode(ssl::verify_none);
-
-        tcp::resolver resolver(ioc);
 
         while (thread_running_) {
             try {
-                auto const results = resolver.resolve("api.binance.com", "443");
-                ssl::stream<beast::tcp_stream> stream(ioc, ctx);
+                std::string body = perform_https_request(
+                    "api.binance.com", "443",
+                    http::verb::get,
+                    "/api/v3/ticker/price?symbol=BTCUSDT"
+                );
 
-                if(!SSL_set_tlsext_host_name(stream.native_handle(), "api.binance.com")) {
-                    beast::error_code ec{static_cast<int>(::ERR_get_error()), net::error::get_ssl_category()};
-                    throw beast::system_error{ec};
-                }
-
-                beast::get_lowest_layer(stream).connect(results);
-                stream.handshake(ssl::stream_base::client);
-
-                http::request<http::empty_body> req{http::verb::get, "/api/v3/ticker/price?symbol=BTCUSDT", 11};
-                req.set(http::field::host, "api.binance.com");
-                req.set(http::field::user_agent, "BoostBeastClient");
-
-                http::write(stream, req);
-
-                beast::flat_buffer buffer;
-                http::response<http::string_body> res;
-                http::read(stream, buffer, res);
-
-                if (res.result() == http::status::ok) {
-                    std::string body = res.body();
-                    size_t pos = body.find("\"price\":\"");
-                    if (pos != std::string::npos) {
-                        pos += 9;
-                        size_t end_pos = body.find("\"", pos);
-                        if (end_pos != std::string::npos) {
-                            std::string price_str = body.substr(pos, end_pos - pos);
-                            double price = std::stod(price_str);
-                            
-                            double scale = 100.0;
-                            auto it = symbols_info_.find(1);
-                            if (it != symbols_info_.end()) {
-                                scale = std::pow(10, -it->second->price_exp);
-                            }
-                            
-                            if (shm_ptr_) {
-                                shm_ptr_->update_price(price * scale);
-                            }
-                        }
+                std::string price_str = get_json_string(body, "price");
+                if (!price_str.empty()) {
+                    double price = std::stod(price_str);
+                    
+                    double scale = 100.0;
+                    auto it = symbols_info_.find(1);
+                    if (it != symbols_info_.end()) {
+                        scale = std::pow(10, -it->second->price_exp);
+                    }
+                    
+                    if (shm_ptr_) {
+                        shm_ptr_->update_price(price * scale);
                     }
                 }
-
-                beast::error_code ec;
-                stream.shutdown(ec);
             } catch (const std::exception& e) {
                 std::cerr << "[MM-Native] Error fetching Binance price: " << e.what() << std::endl;
             }
