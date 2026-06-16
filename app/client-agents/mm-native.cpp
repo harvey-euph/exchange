@@ -61,27 +61,47 @@ public:
                 double mid_price = (info->price_min + info->price_max) / 2.0;
                 shm_ptr_->curr_price = mid_price;
                 shm_ptr_->last_price = mid_price;
+                mm_mid_price_ = mid_price;
+                prev_shm_price_ = mid_price;
                 shm_initialized = true;
             }
         }
 
         // Read Price from SHM (updated by background thread)
         double current_price = shm_ptr_->curr_price;
-        double last_price = shm_ptr_->last_price;
         
-        // Clamp price between info->price_min and info->price_max
-        auto it = symbols_info_.find(1);
-        if (it != symbols_info_.end()) {
-            const auto& info = it->second;
-            if (current_price < info->price_min) current_price = info->price_min;
-            else if (current_price > info->price_max) current_price = info->price_max;
-        } else {
-            if (current_price < 4000.0) current_price = 4000.0;
-            else if (current_price > 6000.0) current_price = 6000.0;
+        // If the background thread updated the base price, align our mid_price
+        if (current_price != prev_shm_price_) {
+            mm_mid_price_ = current_price;
+            prev_shm_price_ = current_price;
         }
 
+        auto it = symbols_info_.find(1);
+        int64_t step = (it != symbols_info_.end()) ? it->second->price_min_step : 1;
+
+        tick_count_++;
+
+        // Every 2 ticks (200ms), add a small fluctuation to the mid_price to make it jump
+        if (tick_count_ % 2 == 0) {
+            std::uniform_real_distribution<> price_fluct(-3.0, 3.0); // +/- 3 steps fluctuation
+            mm_mid_price_ += std::round(price_fluct(gen_)) * step;
+            
+            // Clamp mm_mid_price_
+            if (it != symbols_info_.end()) {
+                const auto& info = it->second;
+                mm_mid_price_ = std::max(static_cast<double>(info->price_min), std::min(static_cast<double>(info->price_max), mm_mid_price_));
+            }
+        }
+
+        // Clamp price between info->price_min and info->price_max
+        double last_price = mm_mid_price_;
+        
         // 2. Market Simulation Logic
         double estimation = last_price + dist_estimation_(gen_);
+        if (it != symbols_info_.end()) {
+            const auto& info = it->second;
+            estimation = std::max(static_cast<double>(info->price_min), std::min(static_cast<double>(info->price_max), estimation));
+        }
 
         // 3. Dynamic Order Management
         manage_orders(estimation);
@@ -89,7 +109,8 @@ public:
         static int count = 0;
         if (++count % 10 == 0) {
             std::cout << "[MM-Native] SHM Price: " << std::fixed << std::setprecision(2) << current_price 
-                      << " | Est: " << estimation << " | Spread Mult: " << spread_multiplier_
+                      << " | MM Mid: " << mm_mid_price_ << " | Est: " << estimation 
+                      << " | Spread Mult: " << spread_multiplier_
                       << " | Active Orders: " << account_.get_open_orders().size() << std::endl;
         }
     }
@@ -155,32 +176,103 @@ private:
 
         int bids = 0, asks = 0;
 
+        // 200ms fluctuation boundary
+        bool is_fluct_tick = (tick_count_ % 2 == 0);
+
         // 1. Handle existing orders: Retreat or pull closer (Never call cancel_order!)
         for (const auto& o : open_orders) {
             double p = static_cast<double>(o.p);
 
             if (o.side == Side_Buy) {
-                // If Bid is too close to estimation (swept) or too far away from estimation:
-                if (p > estimation - 1.0 * step * spread_multiplier_ || p < estimation - 20.0 * step * spread_multiplier_) {
+                bids++;
+                // Check if the order is out of the reasonable window:
+                // Too close to estimation (swept/cross risk) or too far away from estimation
+                if (p > estimation - 1.0 * step * spread_multiplier_ || p < estimation - 25.0 * step * spread_multiplier_) {
                     double new_p = estimation - base_spread_ * step * spread_multiplier_ - std::abs(dist_noise_(gen_)) * step;
                     int64_t rounded_new_p = std::round(new_p / step) * step;
                     if (it != symbols_info_.end()) {
                         rounded_new_p = std::max(it->second->price_min, std::min(it->second->price_max, rounded_new_p));
                     }
-                    replace_order(o.order_id, rounded_new_p, o.q, o.symbol_id, o.side);
+                    // Avoid crossing spread (must be strictly less than estimation)
+                    if (rounded_new_p >= estimation) {
+                        rounded_new_p = std::round((estimation - 1.0 * step) / step) * step;
+                    }
+                    uint64_t new_q = std::uniform_int_distribution<uint64_t>(5, 50)(gen_);
+                    replace_order(o.order_id, rounded_new_p, new_q, o.symbol_id, o.side);
+                } 
+                // If the order is in the reasonable window, and this is fluctuation tick, slightly jitter it
+                else if (is_fluct_tick && std::uniform_real_distribution<>(0.0, 1.0)(gen_) < 0.70) {
+                    // Small price jitter: +/- 1 or 2 steps
+                    int price_jitter = std::uniform_int_distribution<int>(-2, 2)(gen_);
+                    double jittered_p = p + price_jitter * step;
+                    int64_t rounded_new_p = std::round(jittered_p / step) * step;
+                    
+                    // Clamp to symbol price limits
+                    if (it != symbols_info_.end()) {
+                        rounded_new_p = std::max(it->second->price_min, std::min(it->second->price_max, rounded_new_p));
+                    }
+                    
+                    // Ensure buy price remains strictly below estimation to prevent crossing
+                    if (rounded_new_p >= estimation) {
+                        rounded_new_p = std::round((estimation - 1.0 * step) / step) * step;
+                    }
+
+                    // Small qty jitter: +/- 10% to 20% or flat random
+                    int64_t qty_change = std::uniform_int_distribution<int>(-5, 5)(gen_);
+                    int64_t new_q = static_cast<int64_t>(o.q) + qty_change;
+                    if (new_q < 5) new_q = 5;
+                    if (new_q > 50) new_q = 50;
+
+                    // Only replace if something changed
+                    if (rounded_new_p != o.p || new_q != static_cast<int64_t>(o.q)) {
+                        replace_order(o.order_id, rounded_new_p, new_q, o.symbol_id, o.side);
+                    }
                 }
-                bids++;
             } else if (o.side == Side_Sell) {
-                // If Ask is too close to estimation (swept) or too far away from estimation:
-                if (p < estimation + 1.0 * step * spread_multiplier_ || p > estimation + 20.0 * step * spread_multiplier_) {
+                asks++;
+                // Check if the order is out of the reasonable window:
+                // Too close to estimation (swept/cross risk) or too far away from estimation
+                if (p < estimation + 1.0 * step * spread_multiplier_ || p > estimation + 25.0 * step * spread_multiplier_) {
                     double new_p = estimation + base_spread_ * step * spread_multiplier_ + std::abs(dist_noise_(gen_)) * step;
                     int64_t rounded_new_p = std::round(new_p / step) * step;
                     if (it != symbols_info_.end()) {
                         rounded_new_p = std::max(it->second->price_min, std::min(it->second->price_max, rounded_new_p));
                     }
-                    replace_order(o.order_id, rounded_new_p, o.q, o.symbol_id, o.side);
+                    // Avoid crossing spread (must be strictly greater than estimation)
+                    if (rounded_new_p <= estimation) {
+                        rounded_new_p = std::round((estimation + 1.0 * step) / step) * step;
+                    }
+                    uint64_t new_q = std::uniform_int_distribution<uint64_t>(5, 50)(gen_);
+                    replace_order(o.order_id, rounded_new_p, new_q, o.symbol_id, o.side);
                 }
-                asks++;
+                // If the order is in the reasonable window, and this is fluctuation tick, slightly jitter it
+                else if (is_fluct_tick && std::uniform_real_distribution<>(0.0, 1.0)(gen_) < 0.70) {
+                    // Small price jitter: +/- 1 or 2 steps
+                    int price_jitter = std::uniform_int_distribution<int>(-2, 2)(gen_);
+                    double jittered_p = p + price_jitter * step;
+                    int64_t rounded_new_p = std::round(jittered_p / step) * step;
+                    
+                    // Clamp to symbol price limits
+                    if (it != symbols_info_.end()) {
+                        rounded_new_p = std::max(it->second->price_min, std::min(it->second->price_max, rounded_new_p));
+                    }
+                    
+                    // Ensure sell price remains strictly above estimation to prevent crossing
+                    if (rounded_new_p <= estimation) {
+                        rounded_new_p = std::round((estimation + 1.0 * step) / step) * step;
+                    }
+
+                    // Small qty jitter: +/- 10% to 20% or flat random
+                    int64_t qty_change = std::uniform_int_distribution<int>(-5, 5)(gen_);
+                    int64_t new_q = static_cast<int64_t>(o.q) + qty_change;
+                    if (new_q < 5) new_q = 5;
+                    if (new_q > 50) new_q = 50;
+
+                    // Only replace if something changed
+                    if (rounded_new_p != o.p || new_q != static_cast<int64_t>(o.q)) {
+                        replace_order(o.order_id, rounded_new_p, new_q, o.symbol_id, o.side);
+                    }
+                }
             }
         }
 
@@ -192,6 +284,9 @@ private:
             if (it != symbols_info_.end()) {
                 rounded_p = std::max(it->second->price_min, std::min(it->second->price_max, rounded_p));
             }
+            if (rounded_p >= estimation) {
+                rounded_p = std::round((estimation - 1.0 * step) / step) * step;
+            }
             uint64_t q = std::uniform_int_distribution<uint64_t>(5, 50)(gen_);
             new_limit_order(1, Side_Buy, rounded_p, q);
         }
@@ -200,6 +295,9 @@ private:
             int64_t rounded_p = std::round(p / step) * step;
             if (it != symbols_info_.end()) {
                 rounded_p = std::max(it->second->price_min, std::min(it->second->price_max, rounded_p));
+            }
+            if (rounded_p <= estimation) {
+                rounded_p = std::round((estimation + 1.0 * step) / step) * step;
             }
             uint64_t q = std::uniform_int_distribution<uint64_t>(5, 50)(gen_);
             new_limit_order(1, Side_Sell, rounded_p, q);
@@ -256,6 +354,10 @@ private:
     const double base_spread_ = 1.5;
     const double max_spread_multiplier_ = 8.0;
     const double decay_rate_ = 0.95; // decay 5% each tick (100ms)
+
+    int tick_count_ = 0;
+    double mm_mid_price_ = 0.0;
+    double prev_shm_price_ = 0.0;
 };
 
 } // namespace Exchange
