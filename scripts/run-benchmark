@@ -34,8 +34,12 @@ run_make() {
 }
 
 # 2. Compile project (wait for completion)
-echo "Building project..."
-run_make -j$(nproc)
+if [[ "${SKIP_BUILD:-}" != "true" ]]; then
+    echo "Building project..."
+    run_make -j$(nproc)
+else
+    echo "Skipping project build (SKIP_BUILD=true)..."
+fi
 
 # Global variables for cleanup
 EBPF_PID=""
@@ -70,26 +74,30 @@ sudo ./run-services
 echo "Waiting 1 second for services to stabilize..."
 sleep 1
 
+# Accept requests count from the first argument (defaults to 100,000)
+REQUESTS="${1:-100000}"
+
 # Setup log file path
 BRANCH=$(run_git symbolic-ref --short HEAD 2>/dev/null || run_git rev-parse --short HEAD)
 BRANCH="${BRANCH//\//_}"
 COMMIT=$(run_git rev-parse --short=6 HEAD)
 DATE=$(date +%Y%m%d-%H%M%S)
-LOG_FILE="log/benchmark-${BRANCH}-${DATE}-${COMMIT}.log"
+LOG_FILE="${BENCHMARK_LOG:-log/benchmark-${BRANCH}-${DATE}-${COMMIT}.log}"
 mkdir -p log
 
 echo "Logging stdout to: $LOG_FILE"
 
 # 4. Start ebpf-msg-flow and wait 1s for stabilization
 echo "Starting ebpf-msg-flow..."
-sudo ./app/perf/ebpf/ebpf-msg-flow --raw > "$LOG_FILE" &
+# Use append mode (>>) so that multiple runs can write to the same file alternately
+sudo ./app/perf/ebpf/ebpf-msg-flow --raw >> "$LOG_FILE" &
 EBPF_PID=$!
 echo "Waiting 3 seconds for ebpf-msg-flow to stabilize and attach uprobes..."
 sleep 3
 
-# 5. Run benchmark-trader, wait for completion, ignoring output
-echo "Running benchmark-trader..."
-./build/client-perf/benchmark-trader
+# 5. Run benchmark-trader with the target requests count
+echo "Running benchmark-trader with ${REQUESTS} requests..."
+./build/client-perf/benchmark-trader --requests "$REQUESTS"
 
 # 6. Stopping ebpf-msg-flow (this triggers print_stats to stdout/LOG_FILE)
 echo "Stopping ebpf-msg-flow..."

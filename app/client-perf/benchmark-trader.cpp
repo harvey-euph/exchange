@@ -24,7 +24,8 @@ volatile sig_atomic_t g_stop = 0;
 
 class BenchmarkTrader : public AlgoTradingClient {
 public:
-    BenchmarkTrader(const Config& config, bool silent = false) : AlgoTradingClient(config), silent_(silent), gen_(1337) 
+    BenchmarkTrader(const Config& config, uint64_t target_requests = 500000, bool silent = false) 
+        : AlgoTradingClient(config), target_requests_(target_requests), silent_(silent), gen_(1337) 
     {
         config_.timer_interval_ms = 100;
         benchmark_thread_ = std::thread(&BenchmarkTrader::benchmark_loop, this);
@@ -138,7 +139,7 @@ private:
         std::chrono::steady_clock::time_point wait_start_time;
 
         while (running_) {
-            if (sent_count_.load(std::memory_order_relaxed) < TARGET_REQUESTS) {
+            if (sent_count_.load(std::memory_order_relaxed) < target_requests_) {
                 do_trading_action();
                 high_precision_delay(200.0);
             } else {
@@ -153,13 +154,13 @@ private:
                     received_count = rtts_all_.size();
                 }
                 
-                if (received_count >= TARGET_REQUESTS) {
+                if (received_count >= target_requests_) {
                     break;
                 }
 
                 auto wait_now = std::chrono::steady_clock::now();
                 if (std::chrono::duration_cast<std::chrono::seconds>(wait_now - wait_start_time).count() >= 5) {
-                    std::cout << "\n[Warning] Timeout waiting for last " << (TARGET_REQUESTS - received_count) << " responses. Proceeding to report.\n";
+                    std::cout << "\n[Warning] Timeout waiting for last " << (target_requests_ - received_count) << " responses. Proceeding to report.\n";
                     break;
                 }
 
@@ -194,7 +195,7 @@ private:
                           << " | MOD-L: " << recv_mod_long << "/" << sent_modify_long_count_.load(std::memory_order_relaxed)
                           << " | CAN: " << recv_can << "/" << sent_cancel_count_.load(std::memory_order_relaxed)
                           << " | REJ: " << recv_rej << reject_info
-                          << " | Total: " << recv_total << "/" << TARGET_REQUESTS
+                          << " | Total: " << recv_total << "/" << target_requests_
                           << "        " << std::flush;
                 last_print_time = now;
             }
@@ -371,7 +372,7 @@ private:
     std::atomic<uint64_t> sent_modify_short_count_{0};
     std::atomic<uint64_t> sent_modify_long_count_{0};
     std::atomic<uint64_t> sent_cancel_count_{0};
-    const uint64_t TARGET_REQUESTS = 500000;
+    uint64_t target_requests_ = 500000;
 
     std::chrono::steady_clock::time_point start_time_;
 
@@ -401,10 +402,13 @@ private:
 
 int main(int argc, char** argv) {
     bool silent = false;
+    uint64_t target_requests = 500000;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-s" || arg == "--silent") {
             silent = true;
+        } else if ((arg == "-r" || arg == "--requests") && i + 1 < argc) {
+            target_requests = std::stoull(argv[++i]);
         }
     }
 
@@ -418,6 +422,6 @@ int main(int argc, char** argv) {
     config.symbol_ids = {1};
     config.timer_interval_ms = 100;
 
-    Exchange::BenchmarkTrader trader(config, silent);
+    Exchange::BenchmarkTrader trader(config, target_requests, silent);
     return trader.run();
 }

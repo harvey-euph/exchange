@@ -34,7 +34,13 @@ def load_and_validate(filepath, min_lat, max_lat):
         if col not in df.columns:
             raise KeyError(f"Missing required column '{col}' in {filepath}")
             
-    # Clean data
+    # Clean data: remove duplicate header rows (which can happen if multiple runs are appended together)
+    df = df[df["ExecType"] != "ExecType"].copy()
+    
+    # Ensure latency columns are numeric
+    for col in lat_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+        
     original_len = len(df)
     if original_len == 0:
         raise ValueError(f"Input file {filepath} is empty")

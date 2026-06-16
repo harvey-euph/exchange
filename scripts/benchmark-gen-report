@@ -90,9 +90,10 @@ fi
 echo "New branch is: $NEW_BRANCH"
 
 ###########################################################
-echo "Running benchmark on main branch..."
+echo "Initializing and compiling branches on vm-benchmark..."
 ###########################################################
 
+# 1. Compile main branch once, and reset its combined log
 gcloud compute ssh vm-benchmark \
   --zone="$ZONE" \
   --quiet \
@@ -108,14 +109,14 @@ gcloud compute ssh vm-benchmark \
     git clean -fd
 
     make clean
+    make -j\$(nproc)
 
-    sudo ./scripts/run-benchmark
-  " | tee main_benchmark.log
+    # Initialize / clean previous combined log
+    rm -f log/benchmark-main-combined.log
+    mkdir -p log
+  "
 
-###########################################################
-echo "Running benchmark on new branch ($NEW_BRANCH)..."
-###########################################################
-
+# 2. Compile new branch once, and reset its combined log
 gcloud compute ssh vm-benchmark \
   --zone="$ZONE" \
   --quiet \
@@ -131,23 +132,56 @@ gcloud compute ssh vm-benchmark \
     git clean -fd
 
     make clean
+    make -j\$(nproc)
 
-    sudo ./scripts/run-benchmark
-  " | tee new_benchmark.log
+    # Initialize / clean previous combined log
+    rm -f log/benchmark-new-combined.log
+    mkdir -p log
+  "
+
+###########################################################
+echo "Running alternating benchmarks (5 iterations x 100k requests)..."
+###########################################################
+
+for iter in {1..5}; do
+  echo "-----------------------------------------------------------"
+  echo "Iteration $iter / 5: Running main branch benchmark..."
+  echo "-----------------------------------------------------------"
+  gcloud compute ssh vm-benchmark \
+    --zone="$ZONE" \
+    --quiet \
+    --ssh-flag="-o StrictHostKeyChecking=no" \
+    --ssh-flag="-o UserKnownHostsFile=/dev/null" \
+    --command "
+      set -e
+      cd ~/exchange-main
+      sudo SKIP_BUILD=true BENCHMARK_LOG=log/benchmark-main-combined.log ./scripts/run-benchmark 100000
+    "
+
+  echo "-----------------------------------------------------------"
+  echo "Iteration $iter / 5: Running new branch benchmark ($NEW_BRANCH)..."
+  echo "-----------------------------------------------------------"
+  gcloud compute ssh vm-benchmark \
+    --zone="$ZONE" \
+    --quiet \
+    --ssh-flag="-o StrictHostKeyChecking=no" \
+    --ssh-flag="-o UserKnownHostsFile=/dev/null" \
+    --command "
+      set -e
+      cd ~/exchange-new
+      sudo SKIP_BUILD=true BENCHMARK_LOG=log/benchmark-new-combined.log ./scripts/run-benchmark 100000
+    "
+done
 
 ###########################################################
 echo "Copying logs back to managing plane VM..."
 ###########################################################
 
+MAIN_LOG_REL="log/benchmark-main-combined.log"
+NEW_LOG_REL="log/benchmark-new-combined.log"
 
-MAIN_LOG_REL=$(grep -o 'log/benchmark-.*\.log' \
-  main_benchmark.log | head -n 1 || true)
-
-NEW_LOG_REL=$(grep -o 'log/benchmark-.*\.log' \
-  new_benchmark.log | head -n 1 || true)
-
-echo "Extracted main log path: $MAIN_LOG_REL"
-echo "Extracted new log path: $NEW_LOG_REL"
+echo "Using main log path: $MAIN_LOG_REL"
+echo "Using new log path: $NEW_LOG_REL"
 
 NEW_BRANCH_CLEAN="${NEW_BRANCH//\//_}"
 COMMIT=$(git rev-parse --short=6 HEAD)
