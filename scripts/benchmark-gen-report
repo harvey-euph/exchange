@@ -173,4 +173,37 @@ else
   echo "Warning: No new log file path found in output!"
 fi
 
+###########################################################
+echo "Configuring Python environment and running latency comparison..."
+###########################################################
+
+# Ensure Python requirements are met
+"$PROJECT_ROOT/scripts/setup-python-env"
+
+# Activate virtual environment if it exists
+if [ -d "$PROJECT_ROOT/.venv" ]; then
+  source "$PROJECT_ROOT/.venv/bin/activate"
+fi
+
+MAIN_LOG_FILE=""
+if [[ -n "$MAIN_LOG_REL" ]]; then
+  MAIN_LOG_FILE="$PROJECT_ROOT/log/$(basename "$MAIN_LOG_REL")"
+fi
+
+NEW_LOG_FILE=""
+if [[ -n "$NEW_LOG_REL" ]]; then
+  NEW_LOG_FILE="$PROJECT_ROOT/log/$(basename "$NEW_LOG_REL")"
+fi
+
+# Run comparison script if both files are successfully copied
+if [[ -f "$MAIN_LOG_FILE" && -f "$NEW_LOG_FILE" ]]; then
+  echo "Running latency comparison..."
+  python3 "$PROJECT_ROOT/scripts/compare_latency.py" \
+    --baseline "$MAIN_LOG_FILE" \
+    --candidate "$NEW_LOG_FILE"
+else
+  echo "Error: Baseline or Candidate benchmark logs were not found!" >&2
+  exit 1
+fi
+
 echo "Benchmark workflow completed successfully!"

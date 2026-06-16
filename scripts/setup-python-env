@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Script to configure a complete Python environment with required libraries.
+
+set -euo pipefail
+
+# Ensure running from the project root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_ROOT"
+
+echo "=== Python Environment Setup Started ==="
+
+# 1. Check Python version
+if ! command -v python3 &>/dev/null; then
+  echo "Error: python3 is not installed. Please install Python 3 first." >&2
+  exit 1
+fi
+PYTHON_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+echo "Found python3 (version $PYTHON_VER)"
+
+# 2. Try to set up a virtual environment (recommended)
+USE_VENV=true
+VENV_DIR=".venv"
+
+echo "Attempting to create a Python virtual environment in '$VENV_DIR'..."
+
+# Check if python3-venv is installed/available
+if ! python3 -m venv "$VENV_DIR" 2>/dev/null; then
+  echo "Virtual environment creation failed (python3-venv might be missing)."
+  echo "Attempting to install python3-venv using sudo apt-get..."
+  
+  if command -v sudo &>/dev/null && sudo -n true 2>/dev/null; then
+    sudo apt-get update && sudo apt-get install -y python3-venv python3-pip || true
+  else
+    echo "Warning: Cannot run sudo without password or sudo is not available. Skipping apt install."
+  fi
+  
+  # Try again after apt install attempt
+  if ! python3 -m venv "$VENV_DIR" 2>/dev/null; then
+    echo "Could not create virtual environment. Falling back to user-site installation..."
+    USE_VENV=false
+  fi
+fi
+
+# 3. Install packages
+PACKAGES="pandas scipy matplotlib seaborn"
+
+if [ "$USE_VENV" = true ]; then
+  echo "Virtual environment created successfully at '$VENV_DIR'."
+  echo "Upgrading pip and installing requirements inside the virtual environment..."
+  
+  # Activate venv and run pip
+  source "$VENV_DIR"/bin/activate
+  pip install --upgrade pip
+  pip install $PACKAGES
+  
+  echo "=== Setup Successful! ==="
+  echo "To use the environment, run:"
+  echo "  source $VENV_DIR/bin/activate"
+  echo "Then run your python scripts."
+else
+  echo "Installing required Python packages to user site-packages..."
+  
+  # Check if pip is available
+  if ! python3 -m pip --version &>/dev/null; then
+    echo "pip is not available. Downloading and installing get-pip.py..."
+    curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py
+    python3 get-pip.py --user --break-system-packages || true
+    rm -f get-pip.py
+  fi
+  
+  # Resolve pip command path
+  PIP_CMD="python3 -m pip"
+  if ! $PIP_CMD --version &>/dev/null; then
+    if [ -f "$HOME/.local/bin/pip3" ]; then
+      PIP_CMD="$HOME/.local/bin/pip3"
+    elif command -v pip3 &>/dev/null; then
+      PIP_CMD="pip3"
+    else
+      echo "Error: Could not install or locate pip." >&2
+      exit 1
+    fi
+  fi
+  
+  echo "Using pip command: $PIP_CMD"
+  $PIP_CMD install --user --break-system-packages $PACKAGES
+  
+  echo "=== Setup Successful! ==="
+  echo "Python packages installed to user site-packages."
+  echo "Make sure ~/.local/bin is in your PATH."
+fi
