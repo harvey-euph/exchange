@@ -224,7 +224,7 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
     const side = resp.side();
     const rejectCode = resp.rejectCode();
 
-    if (execType !== ExecType.Complete && execType !== ExecType.OrderStatus && symbolInfoRef.current && sId === activeSymbolId) {
+    if (execType !== ExecType.Complete && execType !== ExecType.OrderStatus && execType !== ExecType.Cancelled && symbolInfoRef.current && sId === activeSymbolId) {
       const valErr = validatePrice(p, symbolInfoRef.current);
       if (valErr) {
         addMgmtLog(`[Error] Received invalid OrderResponse price: ${valErr}`);
