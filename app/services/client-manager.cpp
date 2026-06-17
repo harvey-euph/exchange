@@ -29,7 +29,7 @@ int main()
 
     Exchange::ClientManager manager(PORT_CLIENT_MANAGER, request_ring, response_ring, db);
 
-    int main_core = CM_MAIN_CORE;
+    int main_core = CM_CORE;
     if (main_core >= 0) {
         Exchange::set_thread_affinity(main_core, "ClientManager");
     }

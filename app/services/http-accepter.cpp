@@ -14,7 +14,7 @@ using namespace Exchange;
 int main() {
     try {
         boost::asio::io_context ioc{1};
-        int main_core = HTTP_MAIN_CORE;
+        int main_core = OH_CORE;
         if (main_core >= 0) {
             set_thread_affinity(main_core, "HttpAccepter");
         }

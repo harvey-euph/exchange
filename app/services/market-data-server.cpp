@@ -9,7 +9,7 @@ using namespace Exchange;
 int main() {
     setup_signals();
     
-    int main_core = MD_MAIN_CORE;
+    int main_core = MD_CORE;
     if (main_core >= 0) {
         set_thread_affinity(main_core, "MarketDataServer");
     }

@@ -16,9 +16,9 @@ using namespace Exchange;
 int main() {
     try {
         boost::asio::io_context ioc{1};
-        int main_core = PUBLIC_DATA_MAIN_CORE;
+        int main_core = PD_CORE;
         if (main_core >= 0) {
-            set_thread_affinity(main_core, "PublicData_Main");
+            set_thread_affinity(main_core, "PublicData");
         }
         
 #ifdef USE_PGSQL

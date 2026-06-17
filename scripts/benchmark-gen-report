@@ -145,7 +145,7 @@ gcloud compute ssh vm-benchmark \
 echo "Running alternating benchmarks (5 iterations x 100k requests)..."
 ###########################################################
 
-for iter in {1..5}; do
+for iter in {1..10}; do
   echo "-----------------------------------------------------------"
   echo "Iteration $iter / 5: Running main branch benchmark..."
   echo "-----------------------------------------------------------"

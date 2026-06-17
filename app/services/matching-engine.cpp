@@ -10,7 +10,7 @@ int main()
 {
     setup_signals();
 
-    int main_core = ME_MAIN_CORE;
+    int main_core = ME_CORE;
     if (main_core >= 0) {
         Exchange::set_thread_affinity(main_core, "MatchingEngine");
     }
