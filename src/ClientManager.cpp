@@ -206,7 +206,7 @@ void ClientManager::handle_execution_response(const OrderResponseT* resp)
     }    
 
     DTRACE_PROBE1(exchange, exec_resp_before_db, resp->exec_id);
-    db_->update_on_execution(resp, not_sent);
+    // db_->update_on_execution(resp, not_sent);
 }
 
 int ClientManager::poll_client() {
