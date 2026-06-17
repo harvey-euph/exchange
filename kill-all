@@ -1,5 +1,38 @@
 #!/bin/bash
 
+restore_system_tuning() {
+    echo "Restoring system tuning to default..."
+
+    # 1. 恢復 CPU 調速器為動態節能（一般伺服器預設為 powersave 或 schedutil）
+    if command -v cpupower >/dev/null 2>&1; then
+        cpupower frequency-set -g powersave >/dev/null 2>&1
+    fi
+    for gov in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+        [ -f "$gov" ] && echo powersave > "$gov" 2>/dev/null
+    done
+
+    # 2. 恢復 Transparent Huge Page 為預設的啟用狀態
+    if [ -f /sys/kernel/mm/transparent_hugepage/enabled ]; then
+        echo always > /sys/kernel/mm/transparent_hugepage/enabled
+    fi
+    if [ -f /sys/kernel/mm/transparent_hugepage/defrag ]; then
+        echo madvise > /sys/kernel/mm/transparent_hugepage/defrag
+    fi
+
+    # 3. 重新啟用 Swap (假設你的系統原先有啟用 Swap 磁區)
+    swapon -a 2>/dev/null
+
+    # 4. 恢復 RT scheduler 限制 (預設值通常為 950000 毫秒)
+    sysctl -w kernel.sched_rt_runtime_us=950000 >/dev/null
+
+    # 5. 恢復 記憶體行為 預設值
+    sysctl -w vm.swappiness=60 >/dev/null
+    sysctl -w vm.zone_reclaim_mode=0 >/dev/null
+
+    # 註：ulimit 隨進程退出已自動失效，無需在此還原。
+    echo "System tuning restored to default."
+}
+
 # Enforce running with sudo/root privileges upfront
 if [ "$EUID" -ne 0 ]; then
     echo "Error: This script must be run as root/sudo." >&2
@@ -33,5 +66,7 @@ $SUDO_CMD rm -f /dev/shm/ORDER_REQUEST \
 
 # Clean up askpass file
 rm -f "$ASKPASS_PATH"
+
+restore_system_tuning
 
 echo "=== All processes stopped ==="
