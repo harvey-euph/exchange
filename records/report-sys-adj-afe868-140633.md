@@ -69,7 +69,4 @@ Reject / 4-5 lat (+16.3%)
 Largest regression:  
 Cancel / 2-3 lat (-1.2%)  
   
-Release verdict:  
-PASS
-
-Heatmap saved to: /home/harvey_euph/exchange/log/sys-adj-afe868/heatmap.png
+Release verdict:

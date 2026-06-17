@@ -186,7 +186,7 @@ echo "Using main log path: $MAIN_LOG_REL"
 echo "Using new log path: $NEW_LOG_REL"
 
 NEW_BRANCH_CLEAN="${NEW_BRANCH//\//_}"
-COMMIT=$(git rev-parse --short=6 HEAD)
+COMMIT=$(git rev-parse --short=7 HEAD)
 DEST_DIR="$PROJECT_ROOT/log/${NEW_BRANCH_CLEAN}-${COMMIT}"
 
 echo "Creating directory: $DEST_DIR"
