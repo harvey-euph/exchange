@@ -218,7 +218,7 @@ void MarketDataServer::process_market_update(const void* data_ptr, size_t data_s
     {
         std::lock_guard<std::mutex> lock(subs_mutex_);
         auto it = l2_subscribers_.find(symbol_id);
-        if (it != l2_subscribers_.end() && !it->second.empty()) {
+        if (it != l2_subscribers_.end() && !it->second.empty() /* TODO: remove symbol when last subscriber unsub, so no need to check it->second.empty() */) { 
             has_l2_subs = true;
         }
     }
