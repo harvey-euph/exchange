@@ -2,6 +2,7 @@
 #pragma once
 #include <cstdint>
 #include <atomic>
+#include <optional>
 #include <string>
 #include <sys/mman.h>
 #include <fcntl.h>
@@ -28,13 +29,38 @@ struct SHMRing {
     uint64_t mask;
 };
 
+// Token returned by reserve().
+// - payload  : pointer to write your data into directly (zero-copy)
+// - size     : payload capacity you requested
+// The token must be passed unmodified to commit() after you finish writing.
+struct ReserveToken {
+    void*    payload;        // writable slot for the caller's data
+    size_t   size;           // payload size (bytes)
+    uint64_t old_prod_head;  // CAS snapshot needed by commit()
+    uint64_t new_prod_head;  // advanced head written by reserve()
+};
+
 template <bool ReadOnly = false>
 class SHMRingBufferImpl {
 public:
     SHMRingBufferImpl(const std::string& name, size_t capacity = 16384);
     ~SHMRingBufferImpl();
 
+    // Zero-copy two-phase API ------------------------------------------------
+    // Phase 1: atomically claim a slot in the ring.
+    //   On success returns a token whose .payload points directly into SHM.
+    //   Write up to token.size bytes into token.payload, then call commit().
+    //   Returns std::nullopt when the ring is full or the request is too large.
+    std::optional<ReserveToken> reserve(size_t size) requires (!ReadOnly);
+
+    // Phase 2: publish the previously reserved slot to consumers.
+    //   Must be called exactly once per successful reserve(), with the
+    //   unmodified token that was returned.
+    void commit(const ReserveToken& token) requires (!ReadOnly);
+
+    // Convenience wrapper: reserve + memcpy + commit in one call.
     bool enqueue(void* data, size_t size) requires (!ReadOnly);
+
     bool dequeue(void** data, size_t* size) requires (!ReadOnly);
 
     // 監控與統計指標 API

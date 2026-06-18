@@ -149,28 +149,27 @@ SHMRingBufferImpl<ReadOnly>::~SHMRingBufferImpl() {
 constexpr uint32_t WRAP_MARKER = 0xFFFFFFFF;
 
 template <bool ReadOnly>
-bool SHMRingBufferImpl<ReadOnly>::enqueue(void* data, size_t size) requires (!ReadOnly) 
+std::optional<ReserveToken> SHMRingBufferImpl<ReadOnly>::reserve(size_t size) requires (!ReadOnly)
 {
-    if (!data || size == 0) return false;
+    if (size == 0) return std::nullopt;
 
     // 每筆資料需要：4位元組長度 + 實際 Payload 大小
-    size_t required_space = sizeof(uint32_t) + size;
-    
+    const size_t required_space = sizeof(uint32_t) + size;
+
     // 如果單筆封包大於整個 Ring 的容量，這是不可能的任務
-    if (required_space > m_capacity) return false;
+    if (required_space > m_capacity) return std::nullopt;
 
     uint64_t old_prod_head, new_prod_head;
     uint64_t tail_offset;
-    size_t space_to_end;
-    bool wrapped = false;
+    bool wrapped;
 
     // 1. Reservation Phase
     while (true) {
         old_prod_head = m_ring->prod_head.load(std::memory_order_acquire);
         uint64_t current_cons_head = m_ring->cons_head.load(std::memory_order_acquire);
-        
+
         tail_offset = old_prod_head & m_ring->mask;
-        space_to_end = m_capacity - tail_offset;
+        const size_t space_to_end = m_capacity - tail_offset;
 
         if (space_to_end >= required_space) {
             // 情況 A：末端空間足夠
@@ -184,40 +183,69 @@ bool SHMRingBufferImpl<ReadOnly>::enqueue(void* data, size_t size) requires (!Re
 
         // 檢查剩餘絕對空間是否足夠 (防止 Producer 追上 Consumer)
         if (new_prod_head - current_cons_head > m_capacity) {
-            return false;
+            return std::nullopt;
         }
 
-        if (m_ring->prod_head.compare_exchange_weak(old_prod_head, new_prod_head, 
-                                                   std::memory_order_acquire, 
-                                                   std::memory_order_relaxed)) {
+        if (m_ring->prod_head.compare_exchange_weak(old_prod_head, new_prod_head,
+                                                    std::memory_order_acquire,
+                                                    std::memory_order_relaxed)) {
             break;
         }
     }
 
-    // 2. Writing Phase
+    // 2. Slot Preparation Phase
+    //    Decide where the payload header lands; write WRAP_MARKER at the tail
+    //    boundary when the slot wraps around to the start of the buffer.
+    uint8_t* base_ptr = static_cast<uint8_t*>(m_data);
+    uint8_t* tail_ptr = base_ptr + tail_offset;
+
+    uint8_t* payload_hdr_ptr;
     if (!wrapped) {
-        uint8_t* write_ptr = static_cast<uint8_t*>(m_data) + tail_offset;
-        *reinterpret_cast<uint32_t*>(write_ptr) = static_cast<uint32_t>(size);
-        std::memcpy(write_ptr + sizeof(uint32_t), data, size);
+        payload_hdr_ptr = tail_ptr;
     } else {
-        uint8_t* write_ptr = static_cast<uint8_t*>(m_data) + tail_offset;
-        *reinterpret_cast<uint32_t*>(write_ptr) = WRAP_MARKER;
-        
-        uint8_t* start_ptr = static_cast<uint8_t*>(m_data);
-        *reinterpret_cast<uint32_t*>(start_ptr) = static_cast<uint32_t>(size);
-        std::memcpy(start_ptr + sizeof(uint32_t), data, size);
+        *reinterpret_cast<uint32_t*>(tail_ptr) = WRAP_MARKER;
+        payload_hdr_ptr = base_ptr;
     }
 
+    // Write the length header into SHM and hand the caller a direct pointer
+    // to the payload region so they can write without an extra copy.
+    *reinterpret_cast<uint32_t*>(payload_hdr_ptr) = static_cast<uint32_t>(size);
+
+    return ReserveToken {
+        .payload       = payload_hdr_ptr + sizeof(uint32_t),
+        .size          = size,
+        .old_prod_head = old_prod_head,
+        .new_prod_head = new_prod_head,
+    };
+}
+
+template <bool ReadOnly>
+void SHMRingBufferImpl<ReadOnly>::commit(const ReserveToken& token) requires (!ReadOnly)
+{
     // 3. Commit Phase
-    while (m_ring->prod_tail.load(std::memory_order_acquire) != old_prod_head) {
+    //    Spin until all earlier reservations have committed, then advance
+    //    prod_tail to make this slot visible to consumers.
+    while (m_ring->prod_tail.load(std::memory_order_acquire) != token.old_prod_head) {
         #if defined(__x86_64__) || defined(_M_X64)
             __builtin_ia32_pause();
         #else
             std::this_thread::yield();
         #endif
     }
-    
-    m_ring->prod_tail.store(new_prod_head, std::memory_order_release);
+
+    m_ring->prod_tail.store(token.new_prod_head, std::memory_order_release);
+}
+
+template <bool ReadOnly>
+bool SHMRingBufferImpl<ReadOnly>::enqueue(void* data, size_t size) requires (!ReadOnly)
+{
+    if (!data) return false;
+
+    auto token = reserve(size);
+    if (!token) return false;
+
+    std::memcpy(token->payload, data, size);
+    commit(*token);
     return true;
 }
 
