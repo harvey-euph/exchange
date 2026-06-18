@@ -148,7 +148,6 @@ void ClientManager::process_client_request(WSClientPtr client, const void* data,
     switch (type) {
         case ClientRequestData_OrderRequest: {
             auto order_req = request->data_as_OrderRequest();
-
             auto token = request_ring_->reserve(sizeof(OrderRequestT));
             if (token) {
                 new (token->payload) OrderRequestT {

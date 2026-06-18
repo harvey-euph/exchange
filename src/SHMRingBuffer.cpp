@@ -102,7 +102,6 @@ SHMRingBufferImpl<ReadOnly>::SHMRingBufferImpl(const std::string& name, size_t c
         if (is_creator) {
             std::cout << "[SHMRing] " << m_name << " not found. Creating and initializing SHM..." << std::endl;
             
-            // 清空整塊記憶體，確保沒有殘留垃圾
             std::memset(m_mmap, 0, m_total_size);
 
             // 初始化內部結構 (使用 memory_order_relaxed 因為此時還沒有其他人會讀這塊區塊)
@@ -126,7 +125,6 @@ SHMRingBufferImpl<ReadOnly>::SHMRingBufferImpl(const std::string& name, size_t c
                 #endif
             }
 
-            // 安全驗證 Magic Number
             if (m_ring->magic.load(std::memory_order_relaxed) != SHM_RING_MAGIC) {
                 throw std::runtime_error("SHM Magic number mismatch! Corrupted or unexpected memory segment.");
             }
@@ -151,12 +149,9 @@ constexpr uint32_t WRAP_MARKER = 0xFFFFFFFF;
 template <bool ReadOnly>
 std::optional<ReserveToken> SHMRingBufferImpl<ReadOnly>::reserve(size_t size) requires (!ReadOnly)
 {
-    if (size == 0) return std::nullopt;
+    if (!size) return std::nullopt;
 
-    // 每筆資料需要：4位元組長度 + 實際 Payload 大小
     const size_t required_space = sizeof(uint32_t) + size;
-
-    // 如果單筆封包大於整個 Ring 的容量，這是不可能的任務
     if (required_space > m_capacity) return std::nullopt;
 
     uint64_t old_prod_head, new_prod_head;
@@ -219,12 +214,12 @@ std::optional<ReserveToken> SHMRingBufferImpl<ReadOnly>::reserve(size_t size) re
     };
 }
 
+// 3. Commit Phase
+//    Spin until all earlier reservations have committed, then advance
+//    prod_tail to make this slot visible to consumers.
 template <bool ReadOnly>
 void SHMRingBufferImpl<ReadOnly>::commit(const ReserveToken& token) requires (!ReadOnly)
 {
-    // 3. Commit Phase
-    //    Spin until all earlier reservations have committed, then advance
-    //    prod_tail to make this slot visible to consumers.
     while (m_ring->prod_tail.load(std::memory_order_acquire) != token.old_prod_head) {
         #if defined(__x86_64__) || defined(_M_X64)
             __builtin_ia32_pause();
