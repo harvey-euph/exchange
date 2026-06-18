@@ -23,16 +23,24 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-MAIN_LOG_FILE="$DEST_DIR/benchmark-main-combined.log"
-NEW_LOG_FILE="$DEST_DIR/benchmark-new-combined.log"
+MAIN_LOG_FILE="$DEST_DIR/benchmark-main-combined.parquet"
+NEW_LOG_FILE="$DEST_DIR/benchmark-new-combined.parquet"
+
+# Fall back to legacy .log format if Parquet files are absent
+if [[ ! -f "$MAIN_LOG_FILE" ]]; then
+  MAIN_LOG_FILE="$DEST_DIR/benchmark-main-combined.log"
+fi
+if [[ ! -f "$NEW_LOG_FILE" ]]; then
+  NEW_LOG_FILE="$DEST_DIR/benchmark-new-combined.log"
+fi
 
 if [[ ! -f "$MAIN_LOG_FILE" ]]; then
-  echo "Error: baseline log not found: $MAIN_LOG_FILE" >&2
+  echo "Error: baseline data not found in $DEST_DIR (tried .parquet and .log)" >&2
   exit 1
 fi
 
 if [[ ! -f "$NEW_LOG_FILE" ]]; then
-  echo "Error: candidate log not found: $NEW_LOG_FILE" >&2
+  echo "Error: candidate data not found in $DEST_DIR (tried .parquet and .log)" >&2
   exit 1
 fi
 

@@ -22,6 +22,7 @@ jobs:
           command_timeout: 12h
           script: |
             cd /home/${{ secrets.GCP_VM_USER }}/exchange
+            ./scripts/install-requirements
             git fetch origin "${{ github.ref_name }}"
             git checkout -B "${{ github.ref_name }}" FETCH_HEAD
             git reset --hard FETCH_HEAD
@@ -41,6 +42,7 @@ jobs:
           command_timeout: 30m
           script: |
             cd /home/${{ secrets.GCP_VM_USER }}/exchange
+            ./scripts/install-requirements
             BRANCH_CLEAN="${{ github.ref_name }}"
             BRANCH_CLEAN="${BRANCH_CLEAN//\//_}"
             COMMIT=$(git rev-parse --short=7 HEAD)

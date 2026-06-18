@@ -114,8 +114,8 @@ gcloud compute ssh vm-benchmark \
     make clean
     make -j\$(nproc) benchmark
 
-    # Clean previous combined log (no sudo)
-    rm -f log/benchmark-main-combined.log
+    # Clean previous combined log/parquet (no sudo)
+    rm -f log/benchmark-main-combined.parquet log/benchmark-main-combined.log
     mkdir -p log
   "
 
@@ -136,8 +136,8 @@ gcloud compute ssh vm-benchmark \
     make clean
     make -j\$(nproc) benchmark
 
-    # Clean previous combined log (no sudo)
-    rm -f log/benchmark-new-combined.log
+    # Clean previous combined log/parquet (no sudo)
+    rm -f log/benchmark-new-combined.parquet log/benchmark-new-combined.log
     mkdir -p log
   "
 
@@ -157,7 +157,7 @@ for iter in {1..10}; do
     --command "
       set -e
       cd ~/exchange-main
-      sudo SKIP_BUILD=true BENCHMARK_LOG=log/benchmark-main-combined.log ./scripts/run-benchmark 100000
+      sudo SKIP_BUILD=true BENCHMARK_LOG=log/benchmark-main-combined.parquet ./scripts/run-benchmark 100000
     "
 
   echo "-----------------------------------------------------------"
@@ -171,7 +171,7 @@ for iter in {1..10}; do
     --command "
       set -e
       cd ~/exchange-new
-      sudo SKIP_BUILD=true BENCHMARK_LOG=log/benchmark-new-combined.log ./scripts/run-benchmark 100000
+      sudo SKIP_BUILD=true BENCHMARK_LOG=log/benchmark-new-combined.parquet ./scripts/run-benchmark 100000
     "
 done
 
@@ -179,8 +179,11 @@ done
 echo "Copying logs back to managing plane VM..."
 ###########################################################
 
-MAIN_LOG_REL="log/benchmark-main-combined.log"
-NEW_LOG_REL="log/benchmark-new-combined.log"
+MAIN_LOG_REL="log/benchmark-main-combined.parquet"
+NEW_LOG_REL="log/benchmark-new-combined.parquet"
+# Fall back to .log if Parquet wasn't produced (old VM build)
+[ -f "$MAIN_LOG_REL" ] || MAIN_LOG_REL="log/benchmark-main-combined.log"
+[ -f "$NEW_LOG_REL" ]  || NEW_LOG_REL="log/benchmark-new-combined.log"
 
 echo "Using main log path: $MAIN_LOG_REL"
 echo "Using new log path: $NEW_LOG_REL"

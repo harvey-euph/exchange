@@ -25,6 +25,8 @@ sudo apt-get install -y \
   libbpf-dev \
   bpftool \
   systemtap-sdt-dev \
+  libarrow-dev \
+  libparquet-dev \
   nodejs \
   npm \
   tmux

@@ -80,7 +80,7 @@ BRANCH=$(run_git symbolic-ref --short HEAD 2>/dev/null || run_git rev-parse --sh
 BRANCH="${BRANCH//\//_}"
 COMMIT=$(run_git rev-parse --short=6 HEAD)
 DATE=$(date +%Y%m%d-%H%M%S)
-LOG_FILE="${BENCHMARK_LOG:-log/benchmark-${BRANCH}-${DATE}-${COMMIT}.log}"
+LOG_FILE="${BENCHMARK_LOG:-log/benchmark-${BRANCH}-${DATE}-${COMMIT}.parquet}"
 
 mkdir -p log
 touch "$LOG_FILE"
@@ -91,8 +91,19 @@ echo "Logging stdout to: $LOG_FILE"
 
 # Start ebpf-msg-flow
 echo "Starting ebpf-msg-flow..."
-sudo ./app/perf/ebpf/ebpf-msg-flow --raw >> "$LOG_FILE" &
-EBPF_PID=$!
+# Use --parquet for compact binary output when available (Python reads via pyarrow).
+# Detect support at runtime by checking the binary's --help output.
+EBPF_BIN="./app/perf/ebpf/ebpf-msg-flow"
+if strings "$EBPF_BIN" 2>/dev/null | grep -q "USE_PARQUET\|parquet"; then
+    echo "Parquet mode available → $LOG_FILE"
+    sudo "$EBPF_BIN" --parquet "$LOG_FILE" &
+    EBPF_PID=$!
+else
+    echo "[warn] Parquet support not compiled in, falling back to CSV"
+    LOG_FILE="${LOG_FILE%.parquet}.log"
+    sudo "$EBPF_BIN" --raw >> "$LOG_FILE" &
+    EBPF_PID=$!
+fi
 echo "Waiting 3 seconds for ebpf-msg-flow to stabilize..."
 sleep 3
 

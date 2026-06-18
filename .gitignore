@@ -28,3 +28,4 @@ web/.build_done
 
 # Environment Variables
 .env
+*pyc

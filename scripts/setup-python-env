@@ -43,7 +43,7 @@ if ! python3 -m venv "$VENV_DIR" 2>/dev/null; then
 fi
 
 # 3. Install packages
-PACKAGES="pandas scipy matplotlib seaborn"
+PACKAGES="pandas scipy matplotlib seaborn pyarrow"
 
 if [ "$USE_VENV" = true ]; then
   echo "Virtual environment created successfully at '$VENV_DIR'."

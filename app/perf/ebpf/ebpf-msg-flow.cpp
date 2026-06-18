@@ -7,7 +7,15 @@
 #include <iomanip>
 #include <map>
 #include <chrono>
+#include <cstring>
 #include "ebpf-msg-flow.skel.h"
+
+// Arrow / Parquet headers (only used when --parquet is requested)
+#ifdef USE_PARQUET
+#include <arrow/api.h>
+#include <arrow/io/api.h>
+#include <parquet/arrow/writer.h>
+#endif
 
 static volatile bool keep_running = true;
 
@@ -47,18 +55,20 @@ struct LatencyStats {
 std::map<uint8_t, LatencyStats> stats_by_type;
 LatencyStats all_stats;
 
-static bool raw_mode = false;
+static bool raw_mode    = false;
+static bool parquet_mode = false;
+static std::string parquet_path;
 static std::vector<msg_flow_event> raw_events;
 
 std::string get_exec_type_name(uint8_t type) {
     switch (type) {
-        case 0: return "New";
+        case 0:   return "New";
         case 100: return "Modify-Short";
         case 101: return "Modify-Long";
-        case 4: return "Cancel";
-        case 8: return "Reject";
-        case 5: return "Replaced";
-        default: return "Unknown(" + std::to_string(type) + ")";
+        case 4:   return "Cancel";
+        case 8:   return "Reject";
+        case 5:   return "Replaced";
+        default:  return "Unknown(" + std::to_string(type) + ")";
     }
 }
 
@@ -67,7 +77,7 @@ static int handle_event(void *ctx, void *data, size_t data_sz) {
     stats_by_type[ev->exec_type].add(ev);
     all_stats.add(ev);
 
-    if (raw_mode) {
+    if (raw_mode || parquet_mode) {
         raw_events.push_back(*ev);
     }
     return 0;
@@ -171,6 +181,118 @@ void print_stats() {
     std::cout << std::string(table_width, '=') << "\n";
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Parquet output  (compiled only when -DUSE_PARQUET is present)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#ifdef USE_PARQUET
+static void write_parquet(const std::string& path, const std::vector<msg_flow_event>& events) {
+    using namespace arrow;
+
+    const int64_t n = static_cast<int64_t>(events.size());
+
+    // Builders
+    StringBuilder exec_type_builder;
+    Int64Builder  lat01_builder, lat12_builder, lat23_builder, lat34_builder;
+    Int64Builder  lat45_builder, lat56_builder, lat67_builder, lat78_builder;
+
+    // Reserve space; ignore status – only fails on OOM
+    (void)exec_type_builder.Reserve(n);
+    (void)lat01_builder.Reserve(n); (void)lat12_builder.Reserve(n);
+    (void)lat23_builder.Reserve(n); (void)lat34_builder.Reserve(n);
+    (void)lat45_builder.Reserve(n); (void)lat56_builder.Reserve(n);
+    (void)lat67_builder.Reserve(n); (void)lat78_builder.Reserve(n);
+
+    for (const auto& ev : events) {
+        (void)exec_type_builder.Append(get_exec_type_name(ev.exec_type));
+
+        auto append_lat = [](Int64Builder& b, uint64_t a, uint64_t b2) {
+            if (b2 >= a) (void)b.Append(static_cast<int64_t>(b2 - a));
+            else         (void)b.AppendNull();
+        };
+
+        append_lat(lat01_builder, ev.ts0, ev.ts1);
+        append_lat(lat12_builder, ev.ts1, ev.ts2);
+        append_lat(lat23_builder, ev.ts2, ev.ts3);
+        append_lat(lat34_builder, ev.ts3, ev.ts4);
+        append_lat(lat45_builder, ev.ts4, ev.ts5);
+        append_lat(lat56_builder, ev.ts5, ev.ts6);
+        append_lat(lat67_builder, ev.ts6, ev.ts7);
+        append_lat(lat78_builder, ev.ts7, ev.ts8);
+    }
+
+    std::shared_ptr<Array> exec_type_arr, lat01_arr, lat12_arr, lat23_arr, lat34_arr;
+    std::shared_ptr<Array> lat45_arr, lat56_arr, lat67_arr, lat78_arr;
+
+    // Finish builders; cast to void to suppress [[nodiscard]] on Status
+    (void)exec_type_builder.Finish(&exec_type_arr);
+    (void)lat01_builder.Finish(&lat01_arr); (void)lat12_builder.Finish(&lat12_arr);
+    (void)lat23_builder.Finish(&lat23_arr); (void)lat34_builder.Finish(&lat34_arr);
+    (void)lat45_builder.Finish(&lat45_arr); (void)lat56_builder.Finish(&lat56_arr);
+    (void)lat67_builder.Finish(&lat67_arr); (void)lat78_builder.Finish(&lat78_arr);
+
+    auto schema = arrow::schema({
+        field("ExecType", utf8()),
+        field("0-1 lat",  int64()),
+        field("1-2 lat",  int64()),
+        field("2-3 lat",  int64()),
+        field("3-4 lat",  int64()),
+        field("4-5 lat",  int64()),
+        field("5-6 lat",  int64()),
+        field("6-7 lat",  int64()),
+        field("7-8 lat",  int64()),
+    });
+
+    auto table = Table::Make(schema, {
+        exec_type_arr,
+        lat01_arr, lat12_arr, lat23_arr, lat34_arr,
+        lat45_arr, lat56_arr, lat67_arr, lat78_arr,
+    });
+
+    auto outfile_result = io::FileOutputStream::Open(path);
+    if (!outfile_result.ok()) {
+        std::cerr << "[ebpf-msg-flow] Failed to open " << path
+                  << ": " << outfile_result.status().message() << "\n";
+        return;
+    }
+    auto outfile = outfile_result.ValueOrDie();
+
+    parquet::WriterProperties::Builder props_builder;
+    props_builder.compression(parquet::Compression::ZSTD);
+    props_builder.compression_level(3);
+    auto props = props_builder.build();
+
+    auto write_status = parquet::arrow::WriteTable(
+        *table, arrow::default_memory_pool(), outfile, /*chunk_size=*/1 << 20, props);
+    if (!write_status.ok()) {
+        std::cerr << "[ebpf-msg-flow] Parquet write error: " << write_status.message() << "\n";
+    }
+    (void)outfile->Close();
+
+    std::cerr << "[ebpf-msg-flow] Wrote " << n << " events to " << path << "\n";
+}
+#endif // USE_PARQUET
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CSV output  (legacy --raw mode, kept for backward compatibility)
+// ─────────────────────────────────────────────────────────────────────────────
+
+static void write_csv(const std::vector<msg_flow_event>& events) {
+    std::cout << "ExecType,0-1 lat,1-2 lat,2-3 lat,3-4 lat,4-5 lat,5-6 lat,6-7 lat,7-8 lat\n";
+    for (const auto& ev : events) {
+        auto lat = [](uint64_t a, uint64_t b) -> int64_t {
+            return b >= a ? (int64_t)(b - a) : -1;
+        };
+        std::cout << get_exec_type_name(ev.exec_type) << ","
+                  << lat(ev.ts0, ev.ts1) << "," << lat(ev.ts1, ev.ts2) << ","
+                  << lat(ev.ts2, ev.ts3) << "," << lat(ev.ts3, ev.ts4) << ","
+                  << lat(ev.ts4, ev.ts5) << "," << lat(ev.ts5, ev.ts6) << ","
+                  << lat(ev.ts6, ev.ts7) << "," << lat(ev.ts7, ev.ts8) << "\n";
+    }
+    std::cout << std::flush;
+}
+
 int main(int argc, char **argv) {
     bool silent = false;
     for (int i = 1; i < argc; ++i) {
@@ -179,15 +301,30 @@ int main(int argc, char **argv) {
             silent = true;
         } else if (arg == "--raw") {
             raw_mode = true;
-            silent = true;
+            silent   = true;
+        } else if (arg == "--parquet") {
+#ifdef USE_PARQUET
+            parquet_mode = true;
+            silent       = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                parquet_path = argv[++i];
+            } else {
+                std::cerr << "Error: --parquet requires an output file path\n";
+                return 1;
+            }
+#else
+            std::cerr << "Error: this binary was not compiled with Parquet support "
+                         "(rebuild with -DUSE_PARQUET and link -larrow -lparquet)\n";
+            return 1;
+#endif
         }
     }
 
-    if (raw_mode) {
+    if (parquet_mode || raw_mode) {
         raw_events.reserve(500000);
     }
 
-    signal(SIGINT, sig_handler);
+    signal(SIGINT,  sig_handler);
     signal(SIGTERM, sig_handler);
 
     const char *cm_path = "./build/services/client-manager";
@@ -212,12 +349,12 @@ int main(int argc, char **argv) {
     long pid = -1;
     
     // Attach USDT probes manually to the specific binaries
-    skel->links.req_entry = bpf_program__attach_usdt(skel->progs.req_entry, pid, cm_path, "exchange", "req_entry", NULL);
-    skel->links.req_enqueue = bpf_program__attach_usdt(skel->progs.req_enqueue, pid, cm_path, "exchange", "req_enqueue", NULL);
-    skel->links.ob_req_entry = bpf_program__attach_usdt(skel->progs.ob_req_entry, pid, me_path, "exchange", "ob_req_entry", NULL);
-    skel->links.ob_resp_enqueue = bpf_program__attach_usdt(skel->progs.ob_resp_enqueue, pid, me_path, "exchange", "ob_resp_enqueue", NULL);
-    skel->links.exec_resp_entry = bpf_program__attach_usdt(skel->progs.exec_resp_entry, pid, cm_path, "exchange", "exec_resp_entry", NULL);
-    skel->links.exec_resp_before_db = bpf_program__attach_usdt(skel->progs.exec_resp_before_db, pid, cm_path, "exchange", "exec_resp_before_db", NULL);
+    skel->links.req_entry          = bpf_program__attach_usdt(skel->progs.req_entry,          pid, cm_path, "exchange", "req_entry",          NULL);
+    skel->links.req_enqueue        = bpf_program__attach_usdt(skel->progs.req_enqueue,        pid, cm_path, "exchange", "req_enqueue",        NULL);
+    skel->links.ob_req_entry       = bpf_program__attach_usdt(skel->progs.ob_req_entry,       pid, me_path, "exchange", "ob_req_entry",       NULL);
+    skel->links.ob_resp_enqueue    = bpf_program__attach_usdt(skel->progs.ob_resp_enqueue,    pid, me_path, "exchange", "ob_resp_enqueue",    NULL);
+    skel->links.exec_resp_entry    = bpf_program__attach_usdt(skel->progs.exec_resp_entry,    pid, cm_path, "exchange", "exec_resp_entry",    NULL);
+    skel->links.exec_resp_before_db= bpf_program__attach_usdt(skel->progs.exec_resp_before_db,pid, cm_path, "exchange", "exec_resp_before_db",NULL);
 
     if (!skel->links.req_entry || !skel->links.req_enqueue || !skel->links.ob_req_entry || 
         !skel->links.ob_resp_enqueue || !skel->links.exec_resp_entry || !skel->links.exec_resp_before_db) {
@@ -230,11 +367,15 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    if (raw_mode) {
+    if (parquet_mode) {
+        std::cerr << "[ebpf-msg-flow] Parquet mode → " << parquet_path << "\n" << std::flush;
+    } else if (raw_mode) {
+        // Print CSV header immediately so the pipe/file receiver can see it
         std::cout << "ExecType,0-1 lat,1-2 lat,2-3 lat,3-4 lat,4-5 lat,5-6 lat,6-7 lat,7-8 lat\n" << std::flush;
     } else if (!silent) {
         std::cout << "Tracing Message Flow using BPF Skeleton... Ctrl-C to exit.\n";
     }
+
     auto last_print = std::chrono::steady_clock::now();
     while (keep_running) {
         ring_buffer__poll(rb, 100);
@@ -248,25 +389,16 @@ int main(int argc, char **argv) {
 
     ring_buffer__free(rb);
     ebpf_msg_flow_bpf__destroy(skel);
-    if (!raw_mode) {
-        print_stats();
-    } else {
-        // Output all raw events from memory at once
-        for (const auto& ev : raw_events) {
-            int64_t lat01 = (ev.ts1 >= ev.ts0) ? (int64_t)(ev.ts1 - ev.ts0) : -1;
-            int64_t lat12 = (ev.ts2 >= ev.ts1) ? (int64_t)(ev.ts2 - ev.ts1) : -1;
-            int64_t lat23 = (ev.ts3 >= ev.ts2) ? (int64_t)(ev.ts3 - ev.ts2) : -1;
-            int64_t lat34 = (ev.ts4 >= ev.ts3) ? (int64_t)(ev.ts4 - ev.ts3) : -1;
-            int64_t lat45 = (ev.ts5 >= ev.ts4) ? (int64_t)(ev.ts5 - ev.ts4) : -1;
-            int64_t lat56 = (ev.ts6 >= ev.ts5) ? (int64_t)(ev.ts6 - ev.ts5) : -1;
-            int64_t lat67 = (ev.ts7 >= ev.ts6) ? (int64_t)(ev.ts7 - ev.ts6) : -1;
-            int64_t lat78 = (ev.ts8 >= ev.ts7) ? (int64_t)(ev.ts8 - ev.ts7) : -1;
 
-            std::cout << get_exec_type_name(ev.exec_type) << ","
-                      << lat01 << "," << lat12 << "," << lat23 << "," << lat34 << ","
-                      << lat45 << "," << lat56 << "," << lat67 << "," << lat78 << "\n";
-        }
-        std::cout << std::flush;
+    if (parquet_mode) {
+#ifdef USE_PARQUET
+        write_parquet(parquet_path, raw_events);
+#endif
+    } else if (raw_mode) {
+        write_csv(raw_events);
+    } else {
+        print_stats();
     }
+
     return 0;
 }
