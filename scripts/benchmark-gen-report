@@ -142,7 +142,7 @@ gcloud compute ssh vm-benchmark \
   "
 
 ###########################################################
-echo "Running alternating benchmarks (5 iterations x 100k requests)..."
+echo "Running alternating benchmarks (10 iterations x 100k requests)..."
 ###########################################################
 
 for iter in {1..10}; do
@@ -214,34 +214,5 @@ if [[ -n "$NEW_LOG_REL" ]]; then
 fi
 
 ###########################################################
-echo "Configuring Python environment and running latency comparison..."
-###########################################################
-
-# Ensure Python requirements are met
-"$PROJECT_ROOT/scripts/setup-python-env"
-
-# Activate virtual environment if it exists
-if [ -d "$PROJECT_ROOT/.venv" ]; then
-  source "$PROJECT_ROOT/.venv/bin/activate"
-fi
-
-MAIN_LOG_FILE="$DEST_DIR/$(basename "$MAIN_LOG_REL")"
-NEW_LOG_FILE="$DEST_DIR/$(basename "$NEW_LOG_REL")"
-
-if [[ -f "$MAIN_LOG_FILE" && -f "$NEW_LOG_FILE" ]]; then
-  echo "Running latency comparison..."
-  TIME=$(date +%H%M%S)
-  REPORT_FILE="$DEST_DIR/report-${NEW_BRANCH_CLEAN}-${COMMIT}-${TIME}.log"
-  HEATMAP_FILE="$DEST_DIR/heatmap.png"
-  
-  python3 "$PROJECT_ROOT/scripts/compare_latency.py" \
-    --baseline "$MAIN_LOG_FILE" \
-    --candidate "$NEW_LOG_FILE" \
-    --report-out "$REPORT_FILE" \
-    --heatmap-out "$HEATMAP_FILE"
-else
-  echo "Error: Benchmark logs were not found!" >&2
-  exit 1
-fi
-
-echo "Benchmark workflow completed successfully!"
+echo "All done. Logs are in: $DEST_DIR"
+echo "Run scripts/benchmark-analyze \"$DEST_DIR\" to generate the comparison report."

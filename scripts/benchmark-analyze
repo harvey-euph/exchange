@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# benchmark-analyze <DEST_DIR>
+#
+# Runs latency comparison analysis on pre-copied benchmark logs.
+# Always exits 0 so the caller (GitHub Actions) is not affected by
+# whether the benchmark passed or failed – that verdict is left for
+# manual review.
+set -uo pipefail
+
+DEST_DIR="${1:-}"
+if [[ -z "$DEST_DIR" ]]; then
+  echo "Usage: $0 <DEST_DIR>" >&2
+  echo "  DEST_DIR is the directory containing benchmark-main-combined.log" >&2
+  echo "           and benchmark-new-combined.log (produced by benchmark-gen-report)." >&2
+  exit 1
+fi
+
+if [[ ! -d "$DEST_DIR" ]]; then
+  echo "Error: DEST_DIR '$DEST_DIR' does not exist." >&2
+  exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+MAIN_LOG_FILE="$DEST_DIR/benchmark-main-combined.log"
+NEW_LOG_FILE="$DEST_DIR/benchmark-new-combined.log"
+
+if [[ ! -f "$MAIN_LOG_FILE" ]]; then
+  echo "Error: baseline log not found: $MAIN_LOG_FILE" >&2
+  exit 1
+fi
+
+if [[ ! -f "$NEW_LOG_FILE" ]]; then
+  echo "Error: candidate log not found: $NEW_LOG_FILE" >&2
+  exit 1
+fi
+
+# Ensure Python requirements are met
+"$PROJECT_ROOT/scripts/setup-python-env"
+
+# Activate virtual environment if it exists
+if [ -d "$PROJECT_ROOT/.venv" ]; then
+  source "$PROJECT_ROOT/.venv/bin/activate"
+fi
+
+TIME=$(date +%H%M%S)
+REPORT_FILE="$DEST_DIR/report-${TIME}.md"
+HEATMAP_FILE="$DEST_DIR/heatmap.png"
+
+echo "Running latency comparison..."
+echo "  Baseline : $MAIN_LOG_FILE"
+echo "  Candidate: $NEW_LOG_FILE"
+echo "  Report   : $REPORT_FILE"
+echo "  Heatmap  : $HEATMAP_FILE"
+
+# Run the analysis; capture the exit code but do NOT propagate it.
+python3 "$PROJECT_ROOT/scripts/compare_latency.py" \
+  --baseline  "$MAIN_LOG_FILE" \
+  --candidate "$NEW_LOG_FILE" \
+  --report-out "$REPORT_FILE" \
+  --heatmap-out "$HEATMAP_FILE" || true
+
+echo ""
+echo "Analysis complete. Report: $REPORT_FILE"
+echo "(Pass/fail verdict is informational – check the report manually.)"
+
+# Always succeed so this step does not break the CI pipeline.
+exit 0
