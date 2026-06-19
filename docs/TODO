@@ -4,7 +4,7 @@
 
 ## Goal
 
-建立一套基於 USDT + eBPF + PMU 的 Stage Latency Attribution System。
+建立一套基於 USDT + eBPF + PMU 的 Stage Latency Attribution System
 
 目的不是統計整個 Process 的 PMU Counter，而是回答：
 
@@ -26,17 +26,16 @@
 
 ## Stage Boundary
 
-應用程式透過 USDT 定義：
+service 透過 bpf 定義多個 break point
 
 ```c
-USDT_PROBE(service, decode_begin);
-USDT_PROBE(service, decode_end);
-
-USDT_PROBE(service, risk_begin);
-USDT_PROBE(service, risk_end);
-
-USDT_PROBE(service, order_begin);
-USDT_PROBE(service, order_end);
+tcp_recvmsg
+DTRACE_PROBE(exchange, tag_1);
+DTRACE_PROBE(exchange, tag_2);
+DTRACE_PROBE(exchange, tag_3);
+...
+DTRACE_PROBE(exchange, tag_n);
+tcp_sendmsg
 ```
 
 形成：
@@ -44,24 +43,26 @@ USDT_PROBE(service, order_end);
 ```text
 t0
  ↓
-decode
- ↓
 t1
- ↓
-risk
  ↓
 t2
  ↓
-order
+ ...
  ↓
-t3
+tn
 ```
+
+為了追蹤同一個封包 msg 的行為，必須利用多個 tag:
+1. 可以解析封包內容的地方，要解析來取得 exec_id，或者直接使用 usdt 傳入 exec_id 作為封包的識別
+2. 有 enqueue 到 ringbuf 後交給不同 process 的行為所以無法完全依賴 tid (你要自己分辨哪裡需要用 tid 識別，並且 tid 在這個地方是有意義的)
+3. 未來如果需要追蹤 kernel 送封包的末端，可能會需要 sk 序號，目前可能用不到 
+使用以上識別方式來區分同一個封包流動的 Stage
 
 ---
 
 ## Attribution Model
 
-每個 Thread 同時只允許一個 Active Stage。
+每個 msg 同時只允許一個 Active Stage。
 
 eBPF 維護：
 
@@ -92,7 +93,7 @@ Map:
 
 ```c
 key:
-    tid
+    exec_id
 
 value:
     active_stage
