@@ -6,33 +6,39 @@ namespace Exchange {
 
 volatile sig_atomic_t g_stop = 0;
 
-class BenchmarkTrader : public PerfTraderBase {
+class RoundTripSender : public PerfTraderBase {
 public:
-    BenchmarkTrader(const Config& config, uint64_t target_requests, bool silent = false) 
-        : PerfTraderBase(config, silent), target_requests_(target_requests) 
+    RoundTripSender(const Config& config, bool silent = false) 
+        : PerfTraderBase(config, silent) 
     {
-        benchmark_thread_ = std::thread(&BenchmarkTrader::benchmark_loop, this);
+        sender_thread_ = std::thread(&RoundTripSender::sender_loop, this);
     }
 
-    ~BenchmarkTrader() override {
+    ~RoundTripSender() override {
         running_ = false;
-        if (benchmark_thread_.joinable()) {
-            benchmark_thread_.join();
+        if (sender_thread_.joinable()) {
+            sender_thread_.join();
         }
     }
 
     void on_l2_update(const L2Update*) override {}
     void on_l3_update(const L3Update*) override {}
 
+    void on_response_processed(double rtt_us) override {
+        if (running_) {
+            do_trading_action();
+        }
+    }
+
     void on_timer() override {
         if (g_stop) {
-            std::cout << "Benchmark interrupted by user.\n";
+            std::cout << "Sender interrupted by user.\n";
             running_ = false;
         }
     }
 
 private:
-    void benchmark_loop() {
+    void sender_loop() {
         while (running_ && !is_ready()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
@@ -49,30 +55,18 @@ private:
         start_time_ = std::chrono::steady_clock::now();
         auto last_print_time = start_time_;
 
-        while (running_ && sent_count_.load(std::memory_order_relaxed) < target_requests_) {
+        if (running_) {
             do_trading_action();
+        }
 
+        while (running_) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            
             auto now = std::chrono::steady_clock::now();
             if (!silent_ && std::chrono::duration_cast<std::chrono::milliseconds>(now - last_print_time).count() >= 5000) {
                 print_progress();
                 last_print_time = now;
             }
-
-            #if defined(__x86_64__) || defined(_M_X64)
-                __builtin_ia32_pause();
-            #endif
-        }
-
-        while (running_) {
-            size_t current_received;
-            {
-                std::lock_guard<std::mutex> lock(stats_mtx_);
-                current_received = rtts_all_.size();
-            }
-            if (current_received >= sent_count_.load(std::memory_order_relaxed)) {
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
         if (sent_count_.load(std::memory_order_relaxed) > 0) {
@@ -81,34 +75,30 @@ private:
         running_ = false;
     }
 
-    std::thread benchmark_thread_;
-    uint64_t target_requests_;
+    std::thread sender_thread_;
 };
 
 } // namespace Exchange
 
 int main(int argc, char** argv) {
     bool silent = false;
-    uint64_t target_requests = 500000;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-s" || arg == "--silent") {
             silent = true;
-        } else if ((arg == "-r" || arg == "--requests") && i + 1 < argc) {
-            target_requests = std::stoull(argv[++i]);
         }
     }
 
     std::signal(SIGINT, [](int) {
-        std::cout << "\n[BenchmarkTrader] Caught SIGINT. Gracefully shutting down..." << std::endl;
+        std::cout << "\n[RoundTripSender] Caught SIGINT. Gracefully shutting down..." << std::endl;
         Exchange::g_stop = 1;
     });
 
     Exchange::AlgoTradingConfig config;
-    config.client_id = 1000;
+    config.client_id = 1001; 
     config.symbol_ids = {1};
     config.timer_interval_ms = 100;
 
-    Exchange::BenchmarkTrader trader(config, target_requests, silent);
-    return trader.run();
+    Exchange::RoundTripSender sender(config, silent);
+    return sender.run();
 }

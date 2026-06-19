@@ -183,7 +183,7 @@ static __always_inline void end_stage_with_type(uint64_t exec_id, uint32_t tid, 
         sample->exec_id = exec_id;
         sample->stage_id = stage->stage_id;
         sample->exec_type = exec_type;
-        sample->latency_ns = now - stage->start_ts;
+        sample->latency_ns = (now >= stage->start_ts) ? (now - stage->start_ts) : 0;
         sample->cpu_enter = stage->cpu_enter;
         sample->cpu_exit = bpf_get_smp_processor_id();
         sample->cpu_migrated = (sample->cpu_enter != sample->cpu_exit);

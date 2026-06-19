@@ -13,49 +13,7 @@ SESSION="exchange_agents"
 
 mkdir -p "$LOG_DIR"
 
-# Setup askpass if needed
-ASKPASS_PATH="/dev/shm/exchange_askpass_${USER}.sh"
-SUDO_CMD="sudo"
-
-needs_sudo_auth() {
-    if [ "$EUID" -eq 0 ]; then
-        return 1
-    fi
-    if [ -x "$ASKPASS_PATH" ] && SUDO_ASKPASS="$ASKPASS_PATH" sudo -A true 2>/dev/null; then
-        export SUDO_ASKPASS="$ASKPASS_PATH"
-        return 1
-    fi
-    rm -f /dev/shm/sudo_ok
-    tmux new-session -d -s check_sudo_session 'sudo -n true 2>/dev/null && touch /dev/shm/sudo_ok' 2>/dev/null
-    sleep 0.2
-    tmux kill-session -t check_sudo_session 2>/dev/null
-    if [ -f /dev/shm/sudo_ok ]; then
-        rm -f /dev/shm/sudo_ok
-        return 1
-    fi
-    return 0
-}
-
-if needs_sudo_auth; then
-    echo "This script requires sudo privileges to set real-time priority or modify CPU nice values."
-    echo -n "[sudo] password for $USER: "
-    read -s SUDO_PASS
-    echo ""
-    if ! echo "$SUDO_PASS" | sudo -S true 2>/dev/null; then
-        echo "Error: Invalid sudo password."
-        exit 1
-    fi
-    cat <<EOF > "$ASKPASS_PATH"
-#!/bin/bash
-echo "$SUDO_PASS"
-EOF
-    chmod 700 "$ASKPASS_PATH"
-    export SUDO_ASKPASS="$ASKPASS_PATH"
-fi
-
-if [ -n "$SUDO_ASKPASS" ]; then
-    SUDO_CMD="sudo -A"
-fi
+# We don't need sudo askpass since EUID=0 is enforced.
 
 echo ""
 echo "=== Starting Exchange Core Services ==="
@@ -65,7 +23,7 @@ echo "Waiting 1 second for services to initialize..."
 sleep 1
 
 # Grant read/write permissions on the created shared memory segments to allow client agents to connect
-$SUDO_CMD chmod 666 /dev/shm/ORDER_REQUEST* \
+chmod 666 /dev/shm/ORDER_REQUEST* \
                /dev/shm/ORDER_RESPONSE \
                /dev/shm/MARKET_DATA_RING \
                /dev/shm/EXCHANGE_TELEMETRY \
@@ -76,12 +34,14 @@ echo "=== Starting Exchange Client Agents (MM and Noise) ==="
 
 # Check CPU count and set the appropriate Tier
 NUM_CORES=$(nproc)
-if [ "$NUM_CORES" -lt 8 ]; then
+if [ "$NUM_CORES" -lt 3 ]; then
     TIER=1
-elif [ "$NUM_CORES" -lt 24 ]; then
+elif [ "$NUM_CORES" -eq 3 ]; then
     TIER=2
-else
+elif [ "$NUM_CORES" -eq 4 ]; then
     TIER=3
+else
+    TIER=4
 fi
 
 # Find and filter executable agents dynamically
@@ -102,22 +62,23 @@ fi
 get_run_cmd() {
     local exe_path="$1"
     local agent_name="$2"
-    if [ "$TIER" -eq 3 ]; then
+    if [ "$TIER" -eq 1 ]; then
+        echo "$exe_path"
+    else
         local core_id=""
-        case "$agent_name" in
-            "mm-advanced")    core_id="8" ;;
-            "mm-native")      core_id="9" ;;
-            "stra-insider")   core_id="10" ;;
-            "stra-noise")     core_id="11" ;;
-            "stress-trader")  core_id="12" ;;
-        esac
+        if [ "$TIER" -eq 2 ]; then
+            core_id="0"
+        elif [ "$TIER" -eq 3 ]; then
+            core_id="3"
+        elif [ "$TIER" -ge 4 ]; then
+            core_id="4"
+        fi
+        
         if [ -n "$core_id" ]; then
             echo "taskset -c $core_id $exe_path"
         else
             echo "$exe_path"
         fi
-    else
-        echo "$exe_path"
     fi
 }
 

@@ -47,6 +47,14 @@ apply_system_tuning() {
     ulimit -n 1048576
     ulimit -l unlimited
 
+    #
+    # Boost ksoftirqd (network softirq) priority
+    #
+    echo "Boosting network kernel threads (ksoftirqd) priority..."
+    for pid in $(pgrep ksoftirqd); do
+        chrt -f -p 90 $pid 2>/dev/null || true
+    done
+
     echo "System tuning applied."
 }
 
@@ -73,70 +81,25 @@ fi
 
 # Check CPU count and set the appropriate Tier
 NUM_CORES=$(nproc)
-if [ "$NUM_CORES" -lt 8 ]; then
+if [ "$NUM_CORES" -lt 3 ]; then
     TIER=1
     TIER_NAME="Low Power (Cores: $NUM_CORES)"
-elif [ "$NUM_CORES" -lt 24 ]; then
+elif [ "$NUM_CORES" -eq 3 ]; then
     TIER=2
-    TIER_NAME="Dedicated Cores (Cores: $NUM_CORES)"
-else
+    TIER_NAME="3-Core Aggressive (Cores: $NUM_CORES)"
+elif [ "$NUM_CORES" -eq 4 ]; then
     TIER=3
+    TIER_NAME="4-Core Aggressive (Cores: $NUM_CORES)"
+else
+    TIER=4
     TIER_NAME="Full Isolation (Cores: $NUM_CORES)"
 fi
 
 echo "Detected CPU cores: $NUM_CORES. Applying Tier $TIER: $TIER_NAME configuration."
 
-ASKPASS_PATH="/dev/shm/exchange_askpass_${USER}.sh"
-SUDO_CMD="sudo"
+# We don't need sudo askpass since EUID=0 is enforced.
+SUDO_CMD=""
 
-# Setup askpass if sudo is needed (Tier 2 or 3)
-if [ "$TIER" -gt 1 ]; then
-    # Helper to check if sudo requires password inside tmux
-    needs_sudo_auth() {
-        if [ "$EUID" -eq 0 ]; then
-            return 1
-        fi
-        # If we already have a valid askpass set up, we don't need to prompt again
-        if [ -n "$SUDO_ASKPASS" ] && [ -x "$SUDO_ASKPASS" ] && SUDO_ASKPASS="$SUDO_ASKPASS" sudo -A true 2>/dev/null; then
-            return 1
-        fi
-        if [ -x "$ASKPASS_PATH" ] && SUDO_ASKPASS="$ASKPASS_PATH" sudo -A true 2>/dev/null; then
-            export SUDO_ASKPASS="$ASKPASS_PATH"
-            return 1
-        fi
-        # Check if passwordless sudo is already available in a new tmux session
-        rm -f /dev/shm/sudo_ok
-        tmux new-session -d -s check_sudo_session 'sudo -n true 2>/dev/null && touch /dev/shm/sudo_ok' 2>/dev/null
-        sleep 0.2
-        tmux kill-session -t check_sudo_session 2>/dev/null
-        if [ -f /dev/shm/sudo_ok ]; then
-            rm -f /dev/shm/sudo_ok
-            return 1
-        fi
-        return 0
-    }
-
-    if needs_sudo_auth; then
-        echo "This script requires sudo privileges to set real-time priority or modify CPU nice values."
-        echo -n "[sudo] password for $USER: "
-        read -s SUDO_PASS
-        echo ""
-        if ! echo "$SUDO_PASS" | sudo -S true 2>/dev/null; then
-            echo "Error: Invalid sudo password."
-            exit 1
-        fi
-        cat <<EOF > "$ASKPASS_PATH"
-#!/bin/bash
-echo "$SUDO_PASS"
-EOF
-        chmod 700 "$ASKPASS_PATH"
-        export SUDO_ASKPASS="$ASKPASS_PATH"
-    fi
-
-    if [ -n "$SUDO_ASKPASS" ]; then
-        SUDO_CMD="sudo -A"
-    fi
-fi
 
 # Find all executable services dynamically, verifying they correspond to source files
 SERVICES=()
@@ -166,37 +129,45 @@ get_run_cmd() {
     if [ "$TIER" -eq 1 ]; then
         echo "$exe_path"
     elif [ "$TIER" -eq 2 ]; then
-        # Tier 2: Dedicated Cores. Set MAIN_CORE env var, use nice -n -20 (no RT)
+        # Tier 2 (3 Cores): ME=1, CM=2. Others shared.
+        local main_core=""
+        case "$service_name" in
+            "matching-engine")    main_core="1" ;;
+            "client-manager")     main_core="2" ;;
+        esac
+        if [ -n "$main_core" ]; then
+            echo "$SUDO_CMD MAIN_CORE=$main_core chrt -f 99 $exe_path"
+        else
+            echo "$exe_path"
+        fi
+    elif [ "$TIER" -eq 3 ]; then
+        # Tier 3 (4 Cores): ME=1, CM=2, MD=3. Others shared.
+        local main_core=""
         case "$service_name" in
             "matching-engine")    main_core="1" ;;
             "client-manager")     main_core="2" ;;
             "market-data-server") main_core="3" ;;
-            "http-accepter")      main_core="5" ;;
-            "public-data")        main_core="6" ;;
         esac
         if [ -n "$main_core" ]; then
-            echo "$SUDO_CMD MAIN_CORE=$main_core nice -n -20 $exe_path"
+            echo "$SUDO_CMD MAIN_CORE=$main_core chrt -f 99 $exe_path"
         else
             echo "$exe_path"
         fi
     else
-        # Tier 3: Full Isolation. Set MAIN_CORE and BG_CORE env vars, use chrt -f 99 (RT)
+        # Tier 4 (>= 5 Cores): Full Isolation.
         local main_core=""
         local bg_core=""
         case "$service_name" in
             "matching-engine")    main_core="1" ;;
-            "client-manager")     main_core="2"; bg_core="18" ;;
-            "market-data-server") main_core="3"; bg_core="19" ;;
-            "http-accepter")      main_core="5"; bg_core="21" ;;
-            "public-data")        main_core="6"; bg_core="22" ;;
+            "client-manager")     main_core="2" ;;
+            "market-data-server") main_core="3" ;;
+            "http-accepter")      main_core="4" ;;
+            "public-data")        main_core="4" ;;
         esac
         
         local env_vars=""
         if [ -n "$main_core" ]; then
             env_vars="MAIN_CORE=$main_core"
-            if [ -n "$bg_core" ]; then
-                env_vars="$env_vars BG_CORE=$bg_core"
-            fi
         fi
         
         if [ -n "$env_vars" ]; then
