@@ -68,7 +68,6 @@ int main()
                     uint64_t committed = (reserved >= uncommitted) ? (reserved - uncommitted) : 0;
                     double ratio = ring.observer->get_occupancy_ratio() * 100.0;
 
-                    // 產生 ASCII 進度條
                     int bar_width = 15;
                     int pos = static_cast<int>(bar_width * (ratio / 100.0));
                     if (pos > bar_width) pos = bar_width;

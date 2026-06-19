@@ -149,23 +149,25 @@ void ClientManager::process_client_request(WSClientPtr client, const void* data,
         case ClientRequestData_OrderRequest: {
             auto order_req = request->data_as_OrderRequest();
             auto token = request_ring_->reserve(sizeof(OrderRequestT));
-            if (token) {
-                new (token->payload) OrderRequestT {
-                    .action      = order_req->action(),
-                    .exec_id     = order_req->exec_id(),
-                    .order_id    = order_req->order_id(),
-                    .client_id   = order_req->client_id(),
-                    .symbol_id   = order_req->symbol_id(),
-                    .side        = order_req->side(),
-                    .type        = order_req->type(),
-                    .p           = order_req->p(),
-                    .q           = order_req->q(),
-                    .visible_qty = order_req->visible_qty(),
-                    .timestamp   = order_req->timestamp(),
-                };
-                request_ring_->commit(*token);
-                DTRACE_PROBE1(exchange, req_enqueue, order_req->exec_id());
+            if (!token) {
+                // TODO: Send some alert
+                return;
             }
+            new (token->payload) OrderRequestT {
+                .action      = order_req->action(),
+                .exec_id     = order_req->exec_id(),
+                .order_id    = order_req->order_id(),
+                .client_id   = order_req->client_id(),
+                .symbol_id   = order_req->symbol_id(),
+                .side        = order_req->side(),
+                .type        = order_req->type(),
+                .p           = order_req->p(),
+                .q           = order_req->q(),
+                .visible_qty = order_req->visible_qty(),
+                .timestamp   = order_req->timestamp(),
+            };
+            request_ring_->commit(*token);
+            DTRACE_PROBE1(exchange, req_enqueue, order_req->exec_id());
             break;
         }
         case ClientRequestData_PositionRequest: {
@@ -211,17 +213,19 @@ void ClientManager::handle_execution_response(const OrderResponseT* resp)
             session->send(fbb.GetBufferPointer(), fbb.GetSize());
         }
         not_sent = false;
+        DTRACE_PROBE1(exchange, exec_resp_before_db, resp->exec_id);
     }    
 
-    DTRACE_PROBE1(exchange, exec_resp_before_db, resp->exec_id);
     db_->update_on_execution(resp, not_sent);
 }
 
-int ClientManager::poll_client() {
+int ClientManager::poll_client()
+{
     return ws_adaptor_->poll();
 }
 
-int ClientManager::poll_server() {
+int ClientManager::poll_server()
+{
     auto slot = response_ring_->acquire();
     if (!slot) return 0;
 

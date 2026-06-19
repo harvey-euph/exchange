@@ -1,0 +1,725 @@
+1. 忽略前期數據，可以先忽略個一成數據，只分析後段
+
+# Stage-Based Latency Attribution System Design
+
+## Goal
+
+建立一套基於 USDT + eBPF + PMU 的 Stage Latency Attribution System。
+
+目的不是統計整個 Process 的 PMU Counter，而是回答：
+
+> 某一次 Request 的某一個 Stage 為什麼比平常慢？
+
+系統必須能夠把：
+
+* Latency
+* PMU Counter
+* Scheduler Event
+* Page Fault
+* CPU Migration
+
+全部歸因（Attribution）到特定 Stage。
+
+---
+
+# Core Design
+
+## Stage Boundary
+
+應用程式透過 USDT 定義：
+
+```c
+USDT_PROBE(service, decode_begin);
+USDT_PROBE(service, decode_end);
+
+USDT_PROBE(service, risk_begin);
+USDT_PROBE(service, risk_end);
+
+USDT_PROBE(service, order_begin);
+USDT_PROBE(service, order_end);
+```
+
+形成：
+
+```text
+t0
+ ↓
+decode
+ ↓
+t1
+ ↓
+risk
+ ↓
+t2
+ ↓
+order
+ ↓
+t3
+```
+
+---
+
+## Attribution Model
+
+每個 Thread 同時只允許一個 Active Stage。
+
+eBPF 維護：
+
+```c
+struct active_stage {
+    u32 stage_id;
+
+    u64 start_ts;
+
+    u64 cycles0;
+    u64 instructions0;
+
+    u64 llc_miss0;
+    u64 dtlb_miss0;
+
+    u64 branch_miss0;
+
+    u32 cpu_enter;
+
+    u64 page_faults;
+    u64 ctx_switches;
+
+    u64 runqueue_delay_ns;
+};
+```
+
+Map:
+
+```c
+key:
+    tid
+
+value:
+    active_stage
+```
+
+---
+
+# Thread Identity
+
+全部以 TID 對齊。
+
+取得：
+
+```c
+u32 tid = (u32)bpf_get_current_pid_tgid();
+```
+
+原因：
+
+* Scheduler 使用 TID
+* PMU Attribution 使用 TID
+* Page Fault 使用 Current TID
+* USDT Probe 使用 Current TID
+
+因此整個系統統一使用：
+
+```text
+TID
+```
+
+作為 Correlation Key。
+
+---
+
+# Stage Begin
+
+USDT Begin：
+
+```text
+decode_begin
+```
+
+執行：
+
+1. 記錄 timestamp
+2. 記錄 CPU ID
+3. Snapshot PMU Counter
+4. 建立 active_stage
+
+---
+
+需要 Snapshot 的 PMU：
+
+```text
+cycles
+instructions
+llc_miss
+dtlb_miss
+branch_miss
+```
+
+---
+
+# Stage End
+
+USDT End：
+
+```text
+decode_end
+```
+
+執行：
+
+1. 再次讀 PMU
+2. 計算 Delta
+3. 計算 Latency
+4. 輸出 Sample
+5. 刪除 active_stage
+
+---
+
+# Stage Sample
+
+輸出：
+
+```c
+struct stage_sample {
+
+    u32 stage_id;
+
+    u64 latency_ns;
+
+    u64 cycles;
+
+    u64 instructions;
+
+    u64 llc_miss;
+
+    u64 dtlb_miss;
+
+    u64 branch_miss;
+
+    u64 page_faults;
+
+    u64 ctx_switches;
+
+    u64 runqueue_delay_ns;
+
+    u32 cpu_enter;
+    u32 cpu_exit;
+
+    bool cpu_migrated;
+};
+```
+
+---
+
+# PMU Counters
+
+## 1. Cycles
+
+用途：
+
+```text
+CPU 實際消耗時間
+```
+
+PMU：
+
+```text
+PERF_COUNT_HW_CPU_CYCLES
+```
+
+重要性：
+
+```text
+★★★★★
+```
+
+---
+
+## 2. Instructions
+
+用途：
+
+```text
+工作量
+```
+
+PMU：
+
+```text
+PERF_COUNT_HW_INSTRUCTIONS
+```
+
+重要性：
+
+```text
+★★★★★
+```
+
+---
+
+## 3. IPC
+
+不直接記錄。
+
+由：
+
+```text
+instructions / cycles
+```
+
+計算。
+
+用途：
+
+```text
+判斷 Pipeline 是否 Stall
+```
+
+重要性：
+
+```text
+★★★★★
+```
+
+---
+
+## 4. LLC Miss
+
+用途：
+
+```text
+判斷是否進入 DRAM
+```
+
+PMU：
+
+```text
+PERF_COUNT_HW_CACHE_MISSES
+```
+
+最佳情況：
+
+使用 Raw PMU Event：
+
+```text
+MEM_LOAD_RETIRED.L3_MISS
+```
+
+重要性：
+
+```text
+★★★★★
+```
+
+---
+
+## 5. dTLB Miss
+
+用途：
+
+```text
+Page Table Walk
+```
+
+PMU：
+
+```text
+dTLB-load-misses
+```
+
+重要性：
+
+```text
+★★★★★
+```
+
+---
+
+## 6. Branch Miss
+
+用途：
+
+```text
+Branch Predictor 效率
+```
+
+PMU：
+
+```text
+PERF_COUNT_HW_BRANCH_MISSES
+```
+
+重要性：
+
+```text
+★★☆☆☆
+```
+
+通常優先度低於：
+
+* LLC Miss
+* TLB Miss
+
+---
+
+# Scheduler Attribution
+
+## Context Switch
+
+Tracepoint：
+
+```text
+sched:sched_switch
+```
+
+---
+
+### Switch Out
+
+```c
+ctx->prev_pid == tid
+```
+
+表示：
+
+```text
+Thread 被換出
+```
+
+---
+
+### Switch In
+
+```c
+ctx->next_pid == tid
+```
+
+表示：
+
+```text
+Thread 被換入
+```
+
+---
+
+### Attribution
+
+若：
+
+```text
+tid
+```
+
+存在於：
+
+```text
+active_stage
+```
+
+則：
+
+```c
+active_stage.ctx_switches++;
+```
+
+---
+
+# Runqueue Delay
+
+重要：
+
+RT 系統可能很低。
+
+但仍建議收集。
+
+---
+
+需要：
+
+```text
+sched:sched_wakeup
+sched:sched_switch
+```
+
+---
+
+## Wakeup
+
+```c
+ctx->pid == tid
+```
+
+記錄：
+
+```c
+wake_ts[tid] = now;
+```
+
+---
+
+## Scheduled In
+
+```c
+ctx->next_pid == tid
+```
+
+計算：
+
+```c
+delay =
+    now - wake_ts[tid];
+```
+
+累積：
+
+```c
+active_stage.runqueue_delay_ns += delay;
+```
+
+---
+
+# CPU Migration
+
+Stage Begin：
+
+```c
+cpu_enter =
+    bpf_get_smp_processor_id();
+```
+
+---
+
+Stage End：
+
+```c
+cpu_exit =
+    bpf_get_smp_processor_id();
+```
+
+---
+
+判斷：
+
+```text
+cpu_enter != cpu_exit
+```
+
+---
+
+用途：
+
+CPU Migration 會導致：
+
+```text
+L1 Cache Loss
+L2 Cache Loss
+TLB Loss
+```
+
+重要性：
+
+```text
+★★★★☆
+```
+
+---
+
+# Page Fault Attribution
+
+Tracepoint：
+
+```text
+exceptions/page_fault_user
+```
+
+以及：
+
+```text
+exceptions/page_fault_kernel
+```
+
+---
+
+取得：
+
+```c
+current_tid
+```
+
+---
+
+查：
+
+```text
+active_stage
+```
+
+---
+
+如果存在：
+
+```c
+active_stage.page_faults++;
+```
+
+---
+
+# Metrics Priority
+
+實作優先順序：
+
+```text
+1. latency_ns
+
+2. cycles
+
+3. instructions
+
+4. llc_miss
+
+5. dtlb_miss
+
+6. cpu_migration
+
+7. page_fault
+
+8. ctx_switch
+
+9. runqueue_delay
+
+10. branch_miss
+```
+
+---
+
+# Root Cause Methodology
+
+不要分析：
+
+```text
+平均值
+```
+
+不要分析：
+
+```text
+全域 PMU Counter
+```
+
+---
+
+分析：
+
+```text
+P99
+
+P99.9
+
+P99.99
+
+MAX
+```
+
+---
+
+對於每個 Slow Sample：
+
+```text
+Latency Spike
+        ↓
+Stage
+        ↓
+PMU Delta
+        ↓
+Root Cause
+```
+
+例如：
+
+```text
+RiskCheck
+
+Latency: 40 us
+
+LLC Miss: 35
+
+dTLB Miss: 0
+
+Ctx Switch: 0
+
+Page Fault: 0
+```
+
+可判定：
+
+```text
+Memory Stall
+```
+
+---
+
+例如：
+
+```text
+Decode
+
+Latency: 120 us
+
+LLC Miss: 0
+
+Ctx Switch: 3
+
+Runqueue Delay: 95 us
+```
+
+可判定：
+
+```text
+Scheduler
+```
+
+---
+
+例如：
+
+```text
+OrderBuild
+
+Latency: 250 us
+
+Page Fault: 1
+```
+
+可直接判定：
+
+```text
+Page Fault
+```
+
+---
+
+# Final Principle
+
+目標不是回答：
+
+```text
+Cache Miss 有多少？
+```
+
+而是回答：
+
+```text
+這一次 Slow Request
+為什麼慢？
+```
+
+所有 PMU、Scheduler、Fault Event 都必須歸因到：
+
+```text
+TID
+    ↓
+Stage
+    ↓
+Latency Sample
+```
+
+而不是只做全域統計。

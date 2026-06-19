@@ -10,6 +10,7 @@ build
 .vscode
 data/*
 *.csv
+*.pyc
 !data/basic.csv
 .run_service.pid
 
