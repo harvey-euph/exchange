@@ -8,7 +8,7 @@
 
 namespace Exchange {
 
-ClientManager::ClientManager(int port, SHMRingBuffer* request_ring, SHMRingBuffer* response_ring, std::shared_ptr<ClientDatabase> db) 
+ClientManager::ClientManager(int port, SHMRingBuffer* request_ring, mmaplog::MmapReader* response_ring, std::shared_ptr<ClientDatabase> db) 
     : ws_adaptor_(std::make_shared<WSAdaptor>(port))
     , request_ring_(request_ring)
     , response_ring_(response_ring)
@@ -226,14 +226,16 @@ int ClientManager::poll_client()
 
 int ClientManager::poll_server()
 {
-    auto slot = response_ring_->acquire();
-    if (!slot) return 0;
+    const void* data = nullptr;
+    uint32_t len = 0;
+    if (!response_ring_->read_next(data, len)) {
+        return 0;
+    }
 
-    if (slot->size >= sizeof(OrderResponseT)) {
-        auto resp = reinterpret_cast<const OrderResponseT*>(slot->payload);
+    if (len >= sizeof(OrderResponseT)) {
+        auto resp = reinterpret_cast<const OrderResponseT*>(data);
         handle_execution_response(resp);
     }
-    response_ring_->release(*slot);
     return 1;
 }
 

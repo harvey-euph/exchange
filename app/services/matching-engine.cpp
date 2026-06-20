@@ -4,6 +4,7 @@
 #include "AffinityConfig.hpp"
 #include "SignalHandler.hpp"
 #include <iostream>
+#include "mmap_log.h"
 
 
 int main()
@@ -50,7 +51,7 @@ int main()
     }
     */
 
-    Exchange::SHMRingBuffer response_ring(ORDER_RESPONSE, ORDER_RESPONSE_SIZE);
+    mmaplog::MmapWriter response_ring("./execution_journals");
     Exchange::OrderBook book(1, min_step, price_offset, max_price_levels, &response_ring);
 
     Exchange::SHMRingBuffer request_ring(ORDER_REQUEST, ORDER_REQUEST_SIZE);

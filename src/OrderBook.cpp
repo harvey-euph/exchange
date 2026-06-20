@@ -15,7 +15,7 @@ OrderBook::OrderBook(
     int64_t min_step, 
     int64_t price_index_offset, 
     size_t max_price_levels,
-    SHMRingBuffer* response_ring
+    mmaplog::MmapWriter* response_ring
 )   : symbol_id_(symbol_id)
     , min_step_(min_step)
     , price_index_offset_(price_index_offset)
@@ -459,15 +459,23 @@ void OrderBook::sendResponse(ExecType exec_type, uint64_t order_id, uint32_t cli
                               RejectCode reject_code)
 {
     if (!response_ring_) return;
-    resp.exec_type = exec_type;
-    resp.order_id = order_id;
-    resp.client_id = client_id;
-    resp.exec_id = exec_id;
-    resp.side = side;
-    resp.p = p;
-    resp.q = q;
-    resp.reject_code = reject_code;
+    
+    uint64_t offset;
+    void* ptr = response_ring_->reserve(sizeof(OrderResponseT), offset);
+    if (!ptr) return;
+
+    new (ptr) OrderResponseT {
+        .exec_type = exec_type,
+        .order_id = order_id,
+        .client_id = client_id,
+        .exec_id = exec_id,
+        .symbol_id = this->symbol_id_,
+        .side = side,
+        .p = p,
+        .q = q,
+        .reject_code = reject_code
+    };
     
     DTRACE_PROBE1(exchange, ob_resp_enqueue, exec_id);
-    response_ring_->enqueue(&resp, sizeof(OrderResponseT));
+    response_ring_->commit(ptr);
 }

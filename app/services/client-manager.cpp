@@ -6,6 +6,7 @@
 #include "AffinityConfig.hpp"
 #include "SignalHandler.hpp"
 #include <iostream>
+#include "mmap_log.h"
 
 int main() 
 {
@@ -17,10 +18,10 @@ int main()
     auto db = std::make_shared<Exchange::InMemoryClientDatabase>();
 #endif
 
-    Exchange::SHMRingBuffer* response_ring = nullptr;
+    mmaplog::MmapReader* response_ring = nullptr;
     Exchange::SHMRingBuffer* request_ring = nullptr;
     try {
-        response_ring = new Exchange::SHMRingBuffer(ORDER_RESPONSE, ORDER_RESPONSE_SIZE);
+        response_ring = new mmaplog::MmapReader("./execution_journals");
         request_ring = new Exchange::SHMRingBuffer(ORDER_REQUEST, ORDER_REQUEST_SIZE);
     } catch (const std::exception& e) {
         std::cerr << "[ClientManager] FATAL: " << e.what() << std::endl;

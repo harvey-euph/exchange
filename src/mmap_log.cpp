@@ -113,24 +113,39 @@ MmapReader::~MmapReader() {
 void MmapReader::open_file(uint32_t index) {
     if (mapped_addr_) {
         munmap(mapped_addr_, file_size_);
-        close(fd_);
         mapped_addr_ = nullptr;
     }
+    if (fd_ != -1) {
+        close(fd_);
+        fd_ = -1;
+    }
+    
     current_file_index_ = index;
     std::string path = get_filename(dir_, current_file_index_);
     fd_ = open(path.c_str(), O_RDONLY);
     if (fd_ == -1) {
-        // File doesn't exist yet, we will just wait and retry later.
         return; 
     }
     
     struct stat st;
-    if (fstat(fd_, &st) == -1) return;
+    if (fstat(fd_, &st) == -1) {
+        close(fd_);
+        fd_ = -1;
+        return;
+    }
+    
     file_size_ = st.st_size;
+    if (file_size_ == 0) {
+        close(fd_);
+        fd_ = -1;
+        return;
+    }
     
     mapped_addr_ = (uint8_t*)mmap(nullptr, file_size_, PROT_READ, MAP_SHARED, fd_, 0);
     if (mapped_addr_ == MAP_FAILED) {
         mapped_addr_ = nullptr;
+        close(fd_);
+        fd_ = -1;
         return;
     }
     current_offset_ = 0;

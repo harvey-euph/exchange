@@ -7,6 +7,7 @@
 #include "L3Updater.hpp"
 #include "fbs/exchange_generated.h"
 #include "ring/SHMRingBuffer.hpp"
+#include "mmap_log.h"
 #include "Order.hpp"
 
 #include "gtest/gtest_prod.h"
@@ -58,7 +59,7 @@ public:
                        int64_t min_step,
                        int64_t price_offset,
                        size_t max_price_levels = 65536,
-                       SHMRingBuffer* response_ring = nullptr);
+                       mmaplog::MmapWriter* response_ring = nullptr);
 
     ~OrderBook();
 
@@ -74,7 +75,7 @@ private:
     const int64_t min_step_;           // 最小價格單位 (定點數)
     const int64_t price_index_offset_; // 
     const size_t  max_price_levels_;   // price_array_ 大小
-    SHMRingBuffer* response_ring_;
+    mmaplog::MmapWriter* response_ring_;
     OrderResponseT resp;
     L3Updater l3;
 

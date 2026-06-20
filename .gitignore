@@ -31,3 +31,6 @@ web/.build_done
 .env
 
 *.tmp
+
+# Journals
+execution_journals/

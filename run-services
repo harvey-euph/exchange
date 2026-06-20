@@ -71,6 +71,9 @@ SESSION="exchange"
 
 mkdir -p "$LOG_DIR"
 
+JOURNAL_DIR="$PROJECT_ROOT/execution_journals"
+mkdir -p "$JOURNAL_DIR"
+rm -f "$JOURNAL_DIR"/*
 apply_system_tuning
 
 # Check if any service is running (either tmux session exists or processes are active)
