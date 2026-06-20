@@ -1,6 +1,5 @@
 #include "AlgoTradingClient.hpp"
 #include "L2Book.hpp"
-#include "SharedMarketData.hpp"
 #include "DisplayUtil.hpp"
 #include <iostream>
 #include <random>
@@ -18,7 +17,6 @@ public:
     NoiseTrader(const Config& config, uint32_t target_symbol) 
         : AlgoTradingClient(config), target_symbol_(target_symbol) {
         book_.symbol_id = target_symbol;
-        connect_shm();
     }
 
     void on_l2_update(const L2Update* update) override {
@@ -145,16 +143,9 @@ public:
     }
 
 private:
-    void connect_shm() {
-        int fd = shm_open(SHM_NAME, O_RDWR, 0666);
-        if (fd == -1) return;
-        shm_ptr_ = (SharedMarketData*)mmap(NULL, sizeof(SharedMarketData), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        close(fd);
-    }
 
     uint32_t target_symbol_;
     L2Book book_;
-    SharedMarketData* shm_ptr_ = nullptr;
     DisplayFramework display_;
 
     std::mutex strategy_mtx_;
