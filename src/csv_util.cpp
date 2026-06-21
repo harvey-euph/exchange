@@ -422,7 +422,7 @@ void CSVDataGen::processRequest(
         timestamp_ - 1);
 
     fbb_.Finish(req);
-    book_.processRequest(flatbuffers::GetRoot<OrderRequest>(fbb_.GetBufferPointer()));
+    OrderRequestT native_req; flatbuffers::GetRoot<OrderRequest>(fbb_.GetBufferPointer())->UnPackTo(&native_req); book_.processRequest(&native_req);
 }
 
 void CSVDataGen::writeRow(

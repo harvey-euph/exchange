@@ -45,7 +45,7 @@ int main(int argc, char** argv)
 
     for (const OrderRequest* req : reader.getRequests()) {
         const uint64_t start = read_tsc_begin();
-        ob.processRequest(req);
+        OrderRequestT native_req; req->UnPackTo(&native_req); ob.processRequest(&native_req);
         const uint64_t end = read_tsc_end();
         total_cycles += (end - start);
         ++request_count;

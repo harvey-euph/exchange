@@ -15,7 +15,7 @@ protected:
     std::unique_ptr<OrderBook> orderbook;
     uint64_t exec_id = 0;
 
-    const OrderRequest* CreateRequest(
+    OrderRequestT CreateRequest(
         OrderAction act,
         uint64_t order_id,
         uint32_t client_id,
@@ -24,16 +24,20 @@ protected:
         int64_t price,
         uint64_t quantity)
     {
-        static flatbuffers::FlatBufferBuilder fbb(1024);
-        fbb.Clear();
-
-        auto req = CreateOrderRequest(fbb,
-            act, exec_id++, order_id, client_id, 1, side,
-            type, price, quantity, 0, 1000000000ULL
-        );
-
-        fbb.Finish(req);
-        return flatbuffers::GetRoot<OrderRequest>(fbb.GetBufferPointer());
+        OrderRequestT req;
+        req.action = act;
+        req.exec_id = exec_id++;
+        req.order_id = order_id;
+        req.client_id = client_id;
+        req.symbol_id = 1;
+        req.side = side;
+        req.type = type;
+        req.p = price;
+        req.q = quantity;
+        req.visible_qty = 0;
+        req.timestamp = 1000000000ULL;
+        req.msg_seq_num = 0;
+        return req;
     }
 
     void SetupInitialBook() 
@@ -41,19 +45,19 @@ protected:
         // Bids: 10500, 10400, 10300
         std::vector<int64_t> bid_prices = {10500, 10400, 10300};
         for (int64_t p : bid_prices) {
-            const OrderRequest* req = CreateRequest(
+            auto req = CreateRequest(
                 OrderAction_New, 20000+p, 1,
                 Side_Buy, OrderType_Limit, p, 100);
-            orderbook->processRequest(req);
+            orderbook->processRequest(&req);
         }
 
         // Asks: 10600, 10700, 10800
         std::vector<int64_t> ask_prices = {10600, 10700, 10800};
         for (int64_t p : ask_prices) {
-            const OrderRequest* req = CreateRequest(
+            auto req = CreateRequest(
                 OrderAction_New, 40000+p, 2,
                 Side_Sell, OrderType_Limit, p, 100);
-            orderbook->processRequest(req);
+            orderbook->processRequest(&req);
         }
     }
 };
@@ -67,10 +71,10 @@ TEST_F(MarketOrderTest, MarketBuyMatchesAllAsks)
     // 100 @ 10600
     // 100 @ 10700
     // 50  @ 10800
-    const OrderRequest* market_buy = CreateRequest(
+    auto market_buy = CreateRequest(
         OrderAction_New, 9999, 3, Side_Buy, OrderType_Market, 0, 250);
     
-    orderbook->processRequest(market_buy);
+    orderbook->processRequest(&market_buy);
 
     // Verify:
     // Asks 10600, 10700 should be gone.
@@ -95,10 +99,10 @@ TEST_F(MarketOrderTest, MarketSellMatchesAllBids)
     // 100 @ 10500
     // 100 @ 10400
     // 50  @ 10300
-    const OrderRequest* market_sell = CreateRequest(
+    auto market_sell = CreateRequest(
         OrderAction_New, 8888, 4, Side_Sell, OrderType_Market, 0, 250);
     
-    orderbook->processRequest(market_sell);
+    orderbook->processRequest(&market_sell);
 
     // Verify:
     // Bids 10500, 10400 should be gone.
@@ -119,10 +123,10 @@ TEST_F(MarketOrderTest, MarketOrderRestInBookAtExtremePrice)
     SetupInitialBook();
 
     // Market Buy 400 shares (only 300 available in asks)
-    const OrderRequest* market_buy = CreateRequest(
+    auto market_buy = CreateRequest(
         OrderAction_New, 7777, 5, Side_Buy, OrderType_Market, 0, 400);
     
-    orderbook->processRequest(market_buy);
+    orderbook->processRequest(&market_buy);
 
     // All asks should be gone
     EXPECT_EQ(orderbook->active_levels_[1].size(), 0);

@@ -36,96 +36,39 @@ OrderBook::OrderBook(
 
 OrderBook::~OrderBook() {}
 
-// ---------------------------------------------------------------------------
-// RequestView<T>
-//
-// Uniform field-accessor wrapper so the three handle* methods and
-// processRequest can be templated over both:
-//   const OrderRequest*   (FlatBuffers wire type, legacy / test path)
-//   const OrderRequestT*  (native C++ type, zero-copy production path)
-//
-// Only the two specialisations below are instantiated; the primary template
-// is intentionally left undefined so mis-use fails at compile time.
-// ---------------------------------------------------------------------------
-template <typename T> struct RequestView;
-
-template <>
-struct RequestView<const OrderRequest*> {
-    const OrderRequest* r;
-    explicit RequestView(const OrderRequest* p) : r(p) {}
-
-    uint64_t    exec_id()    const { return r->exec_id();    }
-    uint64_t    order_id()   const { return r->order_id();   }
-    uint32_t    client_id()  const { return r->client_id();  }
-    uint32_t    symbol_id()  const { return r->symbol_id();  }
-    Side        side()       const { return r->side();        }
-    OrderType   type()       const { return r->type();        }
-    OrderAction action()     const { return r->action();      }
-    int64_t     p()          const { return r->p();           }
-    uint64_t    q()          const { return r->q();           }
-    uint64_t    visible_qty()const { return r->visible_qty(); }
-    uint64_t    timestamp()  const { return r->timestamp();   }
-    uint64_t    msg_seq_num()const { return r->msg_seq_num(); }
-};
-
-template <>
-struct RequestView<const OrderRequestT*> {
-    const OrderRequestT* r;
-    explicit RequestView(const OrderRequestT* p) : r(p) {}
-
-    uint64_t    exec_id()    const { return r->exec_id;    }
-    uint64_t    order_id()   const { return r->order_id;   }
-    uint32_t    client_id()  const { return r->client_id;  }
-    uint32_t    symbol_id()  const { return r->symbol_id;  }
-    Side        side()       const { return r->side;        }
-    OrderType   type()       const { return r->type;        }
-    OrderAction action()     const { return r->action;      }
-    int64_t     p()          const { return r->p;           }
-    uint64_t    q()          const { return r->q;           }
-    uint64_t    visible_qty()const { return r->visible_qty; }
-    uint64_t    timestamp()  const { return r->timestamp;   }
-    uint64_t    msg_seq_num()const { return r->msg_seq_num; }
-};
-
-
-// ---------------------------------------------------------------------------
-// Generic implementation: processRequestImpl<View>
-// ---------------------------------------------------------------------------
-template <typename T>
-static Order* createOrderFromView(const RequestView<T>& v)
+static Order* createOrder(const OrderRequestT* req)
 {
     return new Order {
-        v.exec_id(),
-        v.order_id(),
-        v.client_id(),
-        v.q(),
-        v.q(),
-        v.type(),
+        req->exec_id,
+        req->order_id,
+        req->client_id,
+        req->q,
+        req->q,
+        req->type,
         nullptr,
         nullptr,
         nullptr,
-        v.timestamp(),
-        v.symbol_id()
+        req->timestamp,
+        req->symbol_id
     };
 }
 
-template <typename T>
-void OrderBook::handleNewOrder(const RequestView<T>& req, bool report_ack)
+void OrderBook::handleNewOrder(const OrderRequestT* req, bool report_ack)
 {
-    if (active_orders_.count(req.order_id())) {
-        sendResponse(ExecType_Rejected, req.order_id(), req.client_id(), req.exec_id(), req.side(), req.p(), req.q(), RejectCode_DuplicateOrderID, req.msg_seq_num());
+    if (active_orders_.count(req->order_id)) {
+        sendResponse(ExecType_Rejected, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_DuplicateOrderID, req->msg_seq_num);
         return;
     }
 
-    Order* taker = createOrderFromView(req);
+    Order* taker = createOrder(req);
 
-    const int side_int = static_cast<int>(req.side());
-    const size_t price_idx = (req.type() == OrderType_Market)
-        ? (req.side() == Side_Buy ? max_price_levels_ - 1 : 0)
-        : price_to_index(req.p());
+    const int side_int = static_cast<int>(req->side);
+    const size_t price_idx = (req->type == OrderType_Market)
+        ? (req->side == Side_Buy ? max_price_levels_ - 1 : 0)
+        : price_to_index(req->p);
 
     if (report_ack) {
-        sendResponse(ExecType_New, req.order_id(), req.client_id(), req.exec_id(), req.side(), req.p(), req.q(), RejectCode_None, req.msg_seq_num());
+        sendResponse(ExecType_New, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_None, req->msg_seq_num);
         report_ack = false;
     }
 
@@ -135,7 +78,7 @@ void OrderBook::handleNewOrder(const RequestView<T>& req, bool report_ack)
     {
         const size_t oppo_idx = (*oppo) - price_array_.data();
         const size_t p = index_to_price(oppo_idx);
-        const bool crossed = (req.side() == Side_Buy) ? (price_idx >= oppo_idx) : (price_idx <= oppo_idx);
+        const bool crossed = (req->side == Side_Buy) ? (price_idx >= oppo_idx) : (price_idx <= oppo_idx);
         if (!crossed) break;
 
         Order* maker = (*oppo)->dummy_head.next;
@@ -153,7 +96,7 @@ void OrderBook::handleNewOrder(const RequestView<T>& req, bool report_ack)
                 const Side maker_side = static_cast<Side>(1^side_int);
                 sendResponse(
                     taker->qty_remaining == 0 ? ExecType_Fill : ExecType_PartialFill,
-                    taker->order_id, taker->client_id, exec_id, req.side(), p, qty_fill);
+                    taker->order_id, taker->client_id, exec_id, req->side, p, qty_fill);
                 sendResponse(
                     maker->qty_remaining == 0 ? ExecType_Fill : ExecType_PartialFill,
                     maker->order_id, maker->client_id, exec_id, maker_side, p, qty_fill);
@@ -185,26 +128,25 @@ void OrderBook::handleNewOrder(const RequestView<T>& req, bool report_ack)
         return;
     }
 
-    PriceLevel* level = GetOrCreatePriceLevel(price_idx, req.side());
-    insertOrderToLevel(level, taker, req.side());
+    PriceLevel* level = GetOrCreatePriceLevel(price_idx, req->side);
+    insertOrderToLevel(level, taker, req->side);
 
     l3.update(symbol_id_, ExecType_New,
-        taker->order_id, req.side(), index_to_price(price_idx), taker->qty_remaining
+        taker->order_id, req->side, index_to_price(price_idx), taker->qty_remaining
     );
 
     active_orders_[taker->order_id] = taker;
 
     if (report_ack) {
-        sendResponse(ExecType_New, req.order_id(), req.client_id(), req.exec_id(), req.side(), req.p(), req.q(), RejectCode_None, req.msg_seq_num());
+        sendResponse(ExecType_New, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_None, req->msg_seq_num);
     }
 }
 
-template <typename T>
-void OrderBook::handleCancelOrder(const RequestView<T>& req, bool report_cancelled)
+void OrderBook::handleCancelOrder(const OrderRequestT* req, bool report_cancelled)
 {
-    auto it = active_orders_.find(req.order_id());
+    auto it = active_orders_.find(req->order_id);
     if (it == active_orders_.end()) {
-        sendResponse(ExecType_Rejected, req.order_id(), req.client_id(), req.exec_id(), req.side(), req.p(), req.q(), RejectCode_OrderNotFound, req.msg_seq_num());
+        sendResponse(ExecType_Rejected, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_OrderNotFound, req->msg_seq_num);
         return;
     }
 
@@ -218,126 +160,85 @@ void OrderBook::handleCancelOrder(const RequestView<T>& req, bool report_cancell
 
     const size_t p = index_to_price(pl - price_array_.data());
 
-    l3.update(symbol_id_, ExecType_Cancelled, o->order_id, req.side(), p, o->qty_remaining);
+    l3.update(symbol_id_, ExecType_Cancelled, o->order_id, req->side, p, o->qty_remaining);
 
     if (!pl->order_count)
-        removePriceLevel(pl, req.side());
+        removePriceLevel(pl, req->side);
 
     delete o;
     if (report_cancelled) {
-        sendResponse(ExecType_Cancelled, req.order_id(), req.client_id(), req.exec_id(), req.side(), req.p(), req.q(), RejectCode_None, req.msg_seq_num());
+        sendResponse(ExecType_Cancelled, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_None, req->msg_seq_num);
     }
 }
 
-template <typename T>
-void OrderBook::handleModifyOrder(const RequestView<T>& req)
+void OrderBook::handleModifyOrder(const OrderRequestT* req)
 {
-    auto it = active_orders_.find(req.order_id());
+    auto it = active_orders_.find(req->order_id);
     if (it == active_orders_.end()) {
-        sendResponse(ExecType_Rejected, req.order_id(), req.client_id(), req.exec_id(), req.side(), req.p(), req.q(), RejectCode_OrderNotFound, req.msg_seq_num());
+        sendResponse(ExecType_Rejected, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_OrderNotFound, req->msg_seq_num);
         return;
     }
 
     Order *o = it->second;
     PriceLevel *pl = o->price_level;
-    PriceLevel *target = req.p() ? &price_array_[price_to_index(req.p())] : pl;
-    int64_t qty_diff = req.q()
-        ? static_cast<int64_t>(req.q()) - static_cast<int64_t>(o->qty_original)
+    PriceLevel *target = req->p ? &price_array_[price_to_index(req->p)] : pl;
+    int64_t qty_diff = req->q
+        ? static_cast<int64_t>(req->q) - static_cast<int64_t>(o->qty_original)
         : 0;
 
     if (pl == target) {
         if (!qty_diff) {
-            sendResponse(ExecType_Replaced, req.order_id(), req.client_id(), req.exec_id(), req.side(), req.p(), req.q(), RejectCode_None, req.msg_seq_num());
+            sendResponse(ExecType_Replaced, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_None, req->msg_seq_num);
             return;
         }
 
         const uint64_t executed_qty = o->qty_original - o->qty_remaining;
-        const uint64_t new_qty = req.q();
+        const uint64_t new_qty = req->q;
         if (new_qty < executed_qty) {
-            sendResponse(ExecType_Rejected, req.order_id(), req.client_id(), req.exec_id(), req.side(), req.p(), req.q(), RejectCode_InvalidModify, req.msg_seq_num());
+            sendResponse(ExecType_Rejected, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_InvalidModify, req->msg_seq_num);
             return;
         }
 
         pl->total_qty += qty_diff;
 
         const size_t p = index_to_price(pl - price_array_.data());
-        l3.update(symbol_id_, ExecType_Replaced, o->order_id, req.side(), p, new_qty - executed_qty);
+        l3.update(symbol_id_, ExecType_Replaced, o->order_id, req->side, p, new_qty - executed_qty);
         o->qty_remaining = new_qty - executed_qty;
         o->qty_original = new_qty;
-        sendResponse(ExecType_Replaced, req.order_id(), req.client_id(), req.exec_id(), req.side(), req.p(), req.q(), RejectCode_None, req.msg_seq_num());
+        sendResponse(ExecType_Replaced, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_None, req->msg_seq_num);
         return;
     }
     handleCancelOrder(req, false);
     handleNewOrder(req, false);
-    sendResponse(ExecType_Replaced, req.order_id(), req.client_id(), req.exec_id(), req.side(), req.p(), req.q(), RejectCode_None, req.msg_seq_num());
+    sendResponse(ExecType_Replaced, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_None, req->msg_seq_num);
 }
 
-// ---------------------------------------------------------------------------
-// processRequest — FlatBuffers wire-format path (used by tests, CSV tooling)
-// ---------------------------------------------------------------------------
-void OrderBook::processRequest(const OrderRequest* req)
-{
-    if (!req) return;
-
-    DTRACE_PROBE1(exchange, ob_req_entry, req->exec_id());
-
-    // logOrderRequest(req);
-
-    RequestView<const OrderRequest*> v{req};
-    switch (v.action()) {
-    case OrderAction_Cancel:
-        handleCancelOrder(v);
-        return;
-    case OrderAction_Modify:
-        if (v.p() && price_invalid(v.p())) {
-            sendResponse(ExecType_Rejected, v.order_id(), v.client_id(), v.exec_id(), v.side(), v.p(), v.q(), RejectCode_PriceInvalid, v.msg_seq_num());
-            return;
-        }
-        handleModifyOrder(v);
-        return;
-    case OrderAction_New:
-        if (v.type() != OrderType_Market && price_invalid(v.p())) {
-            sendResponse(ExecType_Rejected, v.order_id(), v.client_id(), v.exec_id(), v.side(), v.p(), v.q(), RejectCode_PriceInvalid, v.msg_seq_num());
-            return;
-        }
-        handleNewOrder(v);
-        return;
-    default:
-        sendResponse(ExecType_Rejected, v.order_id(), v.client_id(), v.exec_id(), v.side(), v.p(), v.q(), RejectCode_InvalidAction, v.msg_seq_num());
-        return;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// processRequest — Zero-copy OrderRequestT path (called by MatchingEngine)
-// ---------------------------------------------------------------------------
 void OrderBook::processRequest(const OrderRequestT* req)
 {
     if (!req) return;
 
     DTRACE_PROBE1(exchange, ob_req_entry, req->exec_id);
 
-    RequestView<const OrderRequestT*> v{req};
-    switch (v.action()) {
+    switch (req->action) {
     case OrderAction_Cancel:
-        handleCancelOrder(v);
+        handleCancelOrder(req);
         return;
     case OrderAction_Modify:
-        if (v.p() && price_invalid(v.p())) {
-            sendResponse(ExecType_Rejected, v.order_id(), v.client_id(), v.exec_id(), v.side(), v.p(), v.q(), RejectCode_PriceInvalid, v.msg_seq_num());
+        if (req->p && price_invalid(req->p)) {
+            sendResponse(ExecType_Rejected, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_PriceInvalid, req->msg_seq_num);
             return;
         }
-        handleModifyOrder(v);
+        handleModifyOrder(req);
         return;
     case OrderAction_New:
-        if (v.type() != OrderType_Market && price_invalid(v.p())) {
-            sendResponse(ExecType_Rejected, v.order_id(), v.client_id(), v.exec_id(), v.side(), v.p(), v.q(), RejectCode_PriceInvalid, v.msg_seq_num());
+        if (req->type != OrderType_Market && price_invalid(req->p)) {
+            sendResponse(ExecType_Rejected, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_PriceInvalid, req->msg_seq_num);
             return;
         }
-        handleNewOrder(v);
+        handleNewOrder(req);
         return;
     default:
-        sendResponse(ExecType_Rejected, v.order_id(), v.client_id(), v.exec_id(), v.side(), v.p(), v.q(), RejectCode_InvalidAction, v.msg_seq_num());
+        sendResponse(ExecType_Rejected, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_InvalidAction, req->msg_seq_num);
         return;
     }
 }

@@ -13,7 +13,7 @@ protected:
     std::unique_ptr<OrderBook> orderbook;
     uint64_t exec_id = 0;
 
-    const OrderRequest* CreateRequest(
+    OrderRequestT CreateRequest(
         OrderAction act,
         uint64_t order_id,
         uint32_t client_id,
@@ -23,16 +23,20 @@ protected:
         uint64_t quantity,
         uint64_t visible_qty = 0)
     {
-        static flatbuffers::FlatBufferBuilder fbb(1024);
-        fbb.Clear();
-
-        auto req = CreateOrderRequest(fbb,
-            act, exec_id++, order_id, client_id, 1, side,
-            type, price, quantity, visible_qty, 1000000000ULL
-        );
-
-        fbb.Finish(req);
-        return flatbuffers::GetRoot<OrderRequest>(fbb.GetBufferPointer());
+        OrderRequestT req;
+        req.action = act;
+        req.exec_id = exec_id++;
+        req.order_id = order_id;
+        req.client_id = client_id;
+        req.symbol_id = 1;
+        req.side = side;
+        req.type = type;
+        req.p = price;
+        req.q = quantity;
+        req.visible_qty = visible_qty;
+        req.timestamp = 1000000000ULL;
+        req.msg_seq_num = 0;
+        return req;
     }
 
     void SetupInitialBook() 
@@ -41,20 +45,20 @@ protected:
         std::vector<int64_t> bid_prices = {10500, 10400, 10300, 10200, 10100};
         for (int64_t p : bid_prices) {
             for (int i = 0; i < 3; ++i) {
-                const OrderRequest* req = CreateRequest(
+                auto req = CreateRequest(
                     OrderAction_New, 20000+p+i, 1,
                     Side_Buy, OrderType_Limit, p, 100);
-                orderbook->processRequest(req);
+                orderbook->processRequest(&req);
             }
         }
 
         std::vector<int64_t> ask_prices = {10600, 10700, 10800, 10900, 11000};
         for (int64_t p : ask_prices) {
             for (int i = 0; i < 3; ++i) {
-                const OrderRequest* req = CreateRequest(
+                auto req = CreateRequest(
                     OrderAction_New, 40000+p+i, 2,
                     Side_Sell, OrderType_Limit, p, 100);
-                orderbook->processRequest(req);
+                orderbook->processRequest(&req);
             }
         }
     }
@@ -77,10 +81,10 @@ protected:
                 Side side = (rand() % 2 == 0) ? Side_Buy : Side_Sell;
                 uint64_t qty = 50 + (rand() % 200) * 10;     // 50 ~ 2050
 
-                const OrderRequest* req = CreateRequest(
+                auto req = CreateRequest(
                     OrderAction_New, oid, 1, side, OrderType_Limit, price, qty);
 
-                orderbook->processRequest(req);
+                orderbook->processRequest(&req);
                 active_order_ids.push_back(oid);
             }
             else if (op_type < 75)
@@ -89,10 +93,10 @@ protected:
                 size_t idx = rand() % active_order_ids.size();
                 uint64_t oid = active_order_ids[idx];
 
-                const OrderRequest* req = CreateRequest(
+                auto req = CreateRequest(
                     OrderAction_Cancel, oid, 1, Side_Buy, OrderType_Limit, 0, 0);
 
-                orderbook->processRequest(req);
+                orderbook->processRequest(&req);
                 active_order_ids.erase(active_order_ids.begin() + idx);
             }
             else
@@ -110,19 +114,19 @@ protected:
                     int64_t new_price = 10000 + (rand() % 400) * 10;
                     uint64_t new_qty = 50 + (rand() % 150) * 10;
 
-                    const OrderRequest* req = CreateRequest(
+                    auto req = CreateRequest(
                         OrderAction_Modify, oid, 1, Side_Buy, OrderType_Limit, new_price, new_qty);
 
-                    orderbook->processRequest(req);
+                    orderbook->processRequest(&req);
                 }
                 else
                 {
                     // 只改數量
                     uint64_t new_qty = 50 + (rand() % 200) * 10;
-                    const OrderRequest* req = CreateRequest(
+                    auto req = CreateRequest(
                         OrderAction_Modify, oid  , 1, Side_Buy, OrderType_Limit, 0, new_qty);
 
-                    orderbook->processRequest(req);
+                    orderbook->processRequest(&req);
                 }
             }
         }
@@ -277,10 +281,10 @@ TEST_F(OrderBookTest, CancelAndModify)
 
     // ==================== Step 1: Cancel 一筆 Best Bid 之外的訂單 ====================
     // 取消 10300 價格層的其中一筆 (order_id = 30301)
-    const OrderRequest* cancel_req = CreateRequest(
+    auto cancel_req = CreateRequest(
         OrderAction_Cancel, 30301, 1, Side_Buy, OrderType_Limit, 0, 0);
 
-    orderbook->processRequest(cancel_req);
+    orderbook->processRequest(&cancel_req);
 
     // --- 針對取消後的變動進行詳細檢查 ---
     EXPECT_EQ(orderbook->active_orders_.count(30301), 0) << "訂單 30301 應已被移除";
@@ -310,10 +314,10 @@ TEST_F(OrderBookTest, CancelAndModify)
 
     // ==================== Step 2: Modify 訂單 (改價 + 改量) ====================
     // 修改 10300 的另一筆訂單 → 改到 10450，數量改為 250
-    const OrderRequest* modify_req = CreateRequest(
+    auto modify_req = CreateRequest(
         OrderAction_Modify, 30302, 1, Side_Buy, OrderType_Limit, 10450, 250);
 
-    orderbook->processRequest(modify_req);
+    orderbook->processRequest(&modify_req);
 
     // --- 針對修改後的變動進行詳細檢查 ---
 
@@ -359,10 +363,10 @@ TEST_F(OrderBookTest, CancelFullLevelMaintainsPriceLinks)
     SetupInitialBook();
 
     for (uint64_t order_id : {51000ULL, 51001ULL, 51002ULL}) {
-        const OrderRequest* cancel_req = CreateRequest(
+        auto cancel_req = CreateRequest(
             OrderAction_Cancel, order_id, 2, Side_Sell, OrderType_Limit, 0, 0);
 
-        orderbook->processRequest(cancel_req);
+        orderbook->processRequest(&cancel_req);
     }
 
     const size_t ask_10900_idx = orderbook->price_to_index(10900);
@@ -373,10 +377,10 @@ TEST_F(OrderBookTest, CancelFullLevelMaintainsPriceLinks)
     EXPECT_NE(ask_10900->second->worse, ask_10900->second);
 
     for (uint64_t order_id : {50600ULL, 50601ULL, 50602ULL}) {
-        const OrderRequest* cancel_req = CreateRequest(
+        auto cancel_req = CreateRequest(
             OrderAction_Cancel, order_id, 2, Side_Sell, OrderType_Limit, 0, 0);
 
-        orderbook->processRequest(cancel_req);
+        orderbook->processRequest(&cancel_req);
     }
 
     const size_t ask_10700_idx = orderbook->price_to_index(10700);
@@ -396,10 +400,10 @@ TEST_F(OrderBookTest, MatchSingleLayer)
     const uint64_t incoming_qty = 500;
 
     // ==================== 送入大買單 (Limit Buy @ 10600) ====================
-    const OrderRequest* big_bid = CreateRequest(
+    auto big_bid = CreateRequest(
         OrderAction_New, 9991, 9991, Side_Buy, OrderType_Limit, match_price, incoming_qty);
 
-    orderbook->processRequest(big_bid);
+    orderbook->processRequest(&big_bid);
 
     // ==================== 詳細驗證 ====================
 
@@ -448,10 +452,10 @@ TEST_F(OrderBookTest, MatchingMultiLayer)
     const int64_t sell_price = 10300;
 
     // ==================== Step 1: 送入大賣單 (Limit Sell @ 10300) ====================
-    const OrderRequest* big_sell = CreateRequest(
+    auto big_sell = CreateRequest(
         OrderAction_New, 8888, 8888, Side_Sell, OrderType_Limit, sell_price, incoming_qty);
 
-    orderbook->processRequest(big_sell);
+    orderbook->processRequest(&big_sell);
 
     // ==================== 詳細驗證 ====================
 
