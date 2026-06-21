@@ -64,6 +64,22 @@ void AlgoTradingClient::cancel_order(uint64_t order_id, uint32_t symbol_id, Side
     send_order_request(req);
 }
 
+void AlgoTradingClient::request_open_orders() {
+    flatbuffers::FlatBufferBuilder fbb(128);
+    auto req = CreateOpenOrderRequest(fbb, config_.client_id);
+    auto client_req = CreateClientRequest(fbb, ClientRequestData_OpenOrderRequest, req.Union());
+    fbb.Finish(client_req);
+    mgmt_client_->send(fbb.GetBufferPointer(), fbb.GetSize());
+}
+
+void AlgoTradingClient::request_position(uint32_t symbol_id) {
+    flatbuffers::FlatBufferBuilder fbb(128);
+    auto req = CreatePositionRequest(fbb, config_.client_id, symbol_id);
+    auto client_req = CreateClientRequest(fbb, ClientRequestData_PositionRequest, req.Union());
+    fbb.Finish(client_req);
+    mgmt_client_->send(fbb.GetBufferPointer(), fbb.GetSize());
+}
+
 void AlgoTradingClient::send_order_request(OrderRequestT& order) {
     if (order.action == OrderAction_New && order.type != OrderType_Market) {
         std::string err;
@@ -86,6 +102,8 @@ void AlgoTradingClient::send_order_request(OrderRequestT& order) {
     } else {
         order.exec_id = next_id_++;
     }
+
+    order.msg_seq_num = ++o_seq_num_;
 
     order.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::system_clock::now().time_since_epoch()
@@ -174,16 +192,38 @@ int AlgoTradingClient::run() {
     mgmt_client_->run_async([this](const void* data, size_t size) {
         (void)size;
         auto resp = flatbuffers::GetRoot<ClientResponse>(data);
-        if (resp->data_type() == ClientResponseData_OrderResponse) {
-            auto order_resp = resp->data_as_OrderResponse();
-            if (order_resp->exec_type() == ExecType_Complete) {
+        if (resp->data_type() == ClientResponseData_AdminResponse) {
+            auto admin_resp = resp->data_as_AdminResponse();
+            if (admin_resp->type() == AdminResponseType_Ready) {
+                // Request initial state explicitly
+                request_open_orders();
+                for (auto sym : config_.symbol_ids) {
+                    request_position(sym);
+                }
+                
                 {
                     std::lock_guard<std::mutex> lock(ready_mtx_);
                     ready_ = true;
                 }
                 ready_cv_.notify_all();
-                return;
+            } else {
+                RejectCode reason = admin_resp->reject_code();
+                std::cerr << "[AlgoTradingClient] Login rejected: code=" << EnumNameRejectCode(reason) << std::endl;
+                if (reason == RejectCode_InvalidSequenceNumber) {
+                    o_seq_num_ = admin_resp->expected_msg_seq_num();
+                    // Send new LogOn with resynced seq numbers
+                    flatbuffers::FlatBufferBuilder fbb(128);
+                    auto username = fbb.CreateString("client_" + std::to_string(config_.client_id));
+                    auto req = CreateAdminRequest(fbb, AdminAction_LogOn, config_.client_id, username, o_seq_num_, admin_resp->expected_ack_seq_num());
+                    auto client_req = CreateClientRequest(fbb, ClientRequestData_AdminRequest, req.Union());
+                    fbb.Finish(client_req);
+                    mgmt_client_->send(fbb.GetBufferPointer(), fbb.GetSize());
+                    std::cout << "[AlgoTradingClient] Sent resynced LogOn request with MSG=" << o_seq_num_ << ", ACK=" << admin_resp->expected_ack_seq_num() << std::endl;
+                }
             }
+            return;
+        } else if (resp->data_type() == ClientResponseData_OrderResponse) {
+            auto order_resp = resp->data_as_OrderResponse();
             on_order_response(order_resp);
         } else if (resp->data_type() == ClientResponseData_PositionResponse) {
             on_position_response(resp->data_as_PositionResponse());
@@ -215,7 +255,9 @@ int AlgoTradingClient::run() {
     // Subscriptions
     {
         flatbuffers::FlatBufferBuilder fbb(128);
-        auto admin_req = CreateAdminRequest(fbb, AdminAction_LogOn, config_.client_id);
+        auto username = fbb.CreateString("client_" + std::to_string(config_.client_id));
+        ++o_seq_num_;
+        auto admin_req = CreateAdminRequest(fbb, AdminAction_LogOn, config_.client_id, username, o_seq_num_, 0);
         auto client_req = CreateClientRequest(fbb, ClientRequestData_AdminRequest, admin_req.Union());
         fbb.Finish(client_req);
         mgmt_client_->send(fbb.GetBufferPointer(), fbb.GetSize());

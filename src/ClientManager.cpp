@@ -48,74 +48,72 @@ ClientManager::ClientManager(int port, SHMRingBuffer* request_ring, mmaplog::Mma
     std::cout << "[ClientManager] WS Handlers registered." << std::endl;
 }
 
-void ClientManager::handle_client_subscription(WSClientPtr client, uint32_t client_id, bool is_subscribe) {
-    if (is_subscribe) {
-        client_sessions_[client_id].push_back(client);
-        std::cout << "[ClientManager] Client " << client_id << " connected (sessions: " 
-                  << client_sessions_[client_id].size() << ")." << std::endl;
+void ClientManager::handle_client_logon(WSClientPtr client, const AdminRequest* admin_req)
+{
+    uint32_t client_id = admin_req->client_id();
+    uint64_t expected_msg_seq_num = db_->getClientISeqNum(client_id) + 1;
+    uint64_t expected_ack_seq_num = db_->getClientOSeqNum(client_id);
+    
+    uint64_t client_msg_seq_num = admin_req->msg_seq_num();
+    uint64_t client_ack_seq_num = admin_req->ack_seq_num();
+
+    if (client_msg_seq_num != expected_msg_seq_num || client_ack_seq_num > expected_ack_seq_num) {
+        std::cout << "[ClientManager] Client " << client_id << " connection rejected. Expected msg: " 
+                  << expected_msg_seq_num << ", ack: " << expected_ack_seq_num << std::endl;
         
-        // 1. Send pending executions (OrderResponse)
-        auto pending = db_->popPendingResponses(client_id);
-        std::cout << "[ClientManager] Sending " << pending.size() << " pending responses." << std::endl;
-        for (auto& resp : pending) {
-            flatbuffers::FlatBufferBuilder fbb(256);
-            auto resp_offset = OrderResponse::Pack(fbb, &resp);
-            auto client_resp = CreateClientResponse(fbb, ClientResponseData_OrderResponse, resp_offset.Union());
-            fbb.Finish(client_resp);
-            client->send(fbb.GetBufferPointer(), fbb.GetSize());
-            logOrderResponse(flatbuffers::GetRoot<ClientResponse>(fbb.GetBufferPointer())->data_as_OrderResponse(), "[ClientManager] Resending Pending:");
-        }
-
-        // 2. Send current open order as OrderResponse with ExecType=OrderStatus
-        auto open_orders = db_->getOpenOrders(client_id);
-        std::cout << "[ClientManager] Sending " << open_orders.size() << " open orders." << std::endl;
-        for (auto& order_data : open_orders) {
-            client->send(order_data.data(), order_data.size());
-            auto client_resp = flatbuffers::GetRoot<ClientResponse>(order_data.data());
-            if (client_resp->data_type() == ClientResponseData_OrderResponse) {
-                logOrderResponse(client_resp->data_as_OrderResponse(), "[ClientManager] Resending Open Order:");
-            }
-        }
-
-        // 3. Send current positions for all non-zero asset and cash(symbol_id=0)
-        auto positions = db_->getAllPositions(client_id);
-        std::cout << "[ClientManager] Sending positions for " << positions.size() << " symbols." << std::endl;
-        for (auto const& [sym, pos] : positions) {
-            if (pos != 0 || sym == 0) {
-                flatbuffers::FlatBufferBuilder fbb(128);
-                auto pos_resp = CreatePositionResponse(fbb, client_id, sym, pos);
-                auto client_resp = CreateClientResponse(fbb, ClientResponseData_PositionResponse, pos_resp.Union());
-                fbb.Finish(client_resp);
-                client->send(fbb.GetBufferPointer(), fbb.GetSize());
-            }
-        }
-
-        // 4. Set ready for this client session
-        client->is_ready.store(true, std::memory_order_release);
-
-        // 5. Send ready frame (OrderResponse with ExecType=Complete)
         flatbuffers::FlatBufferBuilder fbb(128);
-        auto ready_resp = CreateOrderResponse(fbb, ExecType_Complete, 0, client_id, 0, 0, Side_None, 0, 0, RejectCode_None);
-        auto client_resp = CreateClientResponse(fbb, ClientResponseData_OrderResponse, ready_resp.Union());
+        auto admin_resp = CreateAdminResponse(fbb, AdminResponseType_Reject, client_id, expected_msg_seq_num, expected_ack_seq_num, RejectCode_InvalidSequenceNumber, db_->incrementAndGetClientOSeqNum(client_id));
+        auto client_resp = CreateClientResponse(fbb, ClientResponseData_AdminResponse, admin_resp.Union());
         fbb.Finish(client_resp);
         client->send(fbb.GetBufferPointer(), fbb.GetSize());
-        
-        auto ready_resp_ptr = flatbuffers::GetRoot<ClientResponse>(fbb.GetBufferPointer())->data_as_OrderResponse();
-        logOrderResponse(ready_resp_ptr, "[ClientManager] Mgmt Ready:");
-
-        std::cout << "[ClientManager] Client " << client_id << " session ready (Mgmt Ready)." << std::endl;
-    } else {
-        auto it = client_sessions_.find(client_id);
-        if (it != client_sessions_.end()) {
-            auto& sessions = it->second;
-            sessions.erase(std::remove(sessions.begin(), sessions.end(), client), sessions.end());
-            if (sessions.empty()) {
-                client_sessions_.erase(it);
-            }
-        }
-        client->is_ready.store(false, std::memory_order_release);
-        std::cout << "[ClientManager] Client " << client_id << " disconnected." << std::endl;
+        // Do not store session or mark ready
+        return;
     }
+
+    db_->setClientISeqNum(client_id, client_msg_seq_num);
+    db_->acknowledgeResponses(client_id, client_ack_seq_num);
+
+    client_sessions_[client_id].push_back(client);
+    std::cout << "[ClientManager] Client " << client_id << " connected (sessions: " 
+              << client_sessions_[client_id].size() << ")." << std::endl;
+    
+    // Send missed executions (OrderResponse)
+    auto missed_responses = db_->getResponsesSince(client_id, client_ack_seq_num);
+    std::cout << "[ClientManager] Sending " << missed_responses.size() << " missed responses." << std::endl;
+    for (auto& resp : missed_responses) {
+        flatbuffers::FlatBufferBuilder fbb(256);
+        auto resp_offset = OrderResponse::Pack(fbb, &resp);
+        auto client_resp = CreateClientResponse(fbb, ClientResponseData_OrderResponse, resp_offset.Union());
+        fbb.Finish(client_resp);
+        client->send(fbb.GetBufferPointer(), fbb.GetSize());
+        logOrderResponse(flatbuffers::GetRoot<ClientResponse>(fbb.GetBufferPointer())->data_as_OrderResponse(), "[ClientManager] Resending Missed:");
+    }
+
+    // Set ready for this client session
+    client->is_ready.store(true, std::memory_order_release);
+
+    // Send AdminResponse(Ready)
+    flatbuffers::FlatBufferBuilder fbb(128);
+    auto admin_resp = CreateAdminResponse(fbb, AdminResponseType_Ready, client_id, expected_msg_seq_num, expected_ack_seq_num, RejectCode_None, db_->incrementAndGetClientOSeqNum(client_id));
+    auto client_resp = CreateClientResponse(fbb, ClientResponseData_AdminResponse, admin_resp.Union());
+    fbb.Finish(client_resp);
+    client->send(fbb.GetBufferPointer(), fbb.GetSize());
+    
+    std::cout << "[ClientManager] Client " << client_id << " session ready." << std::endl;
+}
+
+void ClientManager::handle_client_logout(WSClientPtr client, const AdminRequest* admin_req) {
+    uint32_t client_id = admin_req->client_id();
+    auto it = client_sessions_.find(client_id);
+    if (it != client_sessions_.end()) {
+        auto& sessions = it->second;
+        sessions.erase(std::remove(sessions.begin(), sessions.end(), client), sessions.end());
+        if (sessions.empty()) {
+            client_sessions_.erase(it);
+        }
+    }
+    client->is_ready.store(false, std::memory_order_release);
+    std::cout << "[ClientManager] Client " << client_id << " disconnected." << std::endl;
 }
 
 void ClientManager::process_client_request(WSClientPtr client, const void* data, size_t size)
@@ -132,9 +130,10 @@ void ClientManager::process_client_request(WSClientPtr client, const void* data,
     if (type == ClientRequestData_AdminRequest) {
         auto admin_req = request->data_as_AdminRequest();
         if (admin_req->action() == AdminAction_LogOn) {
-            this->handle_client_subscription(client, admin_req->client_id(), true);
+            this->handle_client_logon(client, admin_req);
         } else if (admin_req->action() == AdminAction_LogOut) {
-            this->handle_client_subscription(client, admin_req->client_id(), false);
+            this->handle_client_logout(client, admin_req);
+            // TODO: when received EOF, also process as logout
         }
         return;
     }
@@ -165,6 +164,7 @@ void ClientManager::process_client_request(WSClientPtr client, const void* data,
                 .q           = order_req->q(),
                 .visible_qty = order_req->visible_qty(),
                 .timestamp   = order_req->timestamp(),
+                .msg_seq_num = order_req->msg_seq_num(),
             };
             request_ring_->commit(*token);
             DTRACE_PROBE1(exchange, req_enqueue, order_req->exec_id());
@@ -202,10 +202,13 @@ void ClientManager::handle_execution_response(const OrderResponseT* resp)
     uint32_t client_id = resp->client_id;
     bool not_sent = true;
 
+    OrderResponseT mut_resp = *resp;
+    mut_resp.msg_seq_num = db_->incrementAndGetClientOSeqNum(client_id);
+
     auto it = client_sessions_.find(client_id);
     if (it != client_sessions_.end() && !it->second.empty()) {
         flatbuffers::FlatBufferBuilder fbb(256);
-        auto resp_offset = OrderResponse::Pack(fbb, resp);
+        auto resp_offset = OrderResponse::Pack(fbb, &mut_resp);
         auto client_resp = CreateClientResponse(fbb, ClientResponseData_OrderResponse, resp_offset.Union());
         fbb.Finish(client_resp);
 
@@ -213,10 +216,10 @@ void ClientManager::handle_execution_response(const OrderResponseT* resp)
             session->send(fbb.GetBufferPointer(), fbb.GetSize());
         }
         not_sent = false;
-        DTRACE_PROBE1(exchange, exec_resp_before_db, resp->exec_id);
+        DTRACE_PROBE1(exchange, exec_resp_before_db, mut_resp.exec_id);
     }    
 
-    db_->update_on_execution(resp, not_sent);
+    db_->update_on_execution(&mut_resp, not_sent);
 }
 
 int ClientManager::poll_client()

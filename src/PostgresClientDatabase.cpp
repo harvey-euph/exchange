@@ -18,7 +18,7 @@ PostgresClientDatabase::PostgresClientDatabase(const std::string& conn_str)
 
 PostgresClientDatabase::~PostgresClientDatabase() = default;
 
-void PostgresClientDatabase::addPendingResponse(uint32_t client_id, const OrderResponseT& resp) {
+void PostgresClientDatabase::appendResponseLog(uint32_t client_id, const OrderResponseT& resp) {
     std::lock_guard<std::mutex> lock(mutex_);
     uint64_t exec_id = resp.exec_id;
     
@@ -63,6 +63,13 @@ std::vector<OrderResponseT> PostgresClientDatabase::popPendingResponses(uint32_t
     }
     return result;
 }
+
+uint64_t PostgresClientDatabase::getClientISeqNum(uint32_t client_id) { return 0; }
+void PostgresClientDatabase::setClientISeqNum(uint32_t client_id, uint64_t seq_num) {}
+uint64_t PostgresClientDatabase::getClientOSeqNum(uint32_t client_id) { return 0; }
+uint64_t PostgresClientDatabase::incrementAndGetClientOSeqNum(uint32_t client_id) { return 0; }
+std::vector<OrderResponseT> PostgresClientDatabase::getResponsesSince(uint32_t client_id, uint64_t ack_seq_num) { return {}; }
+void PostgresClientDatabase::acknowledgeResponses(uint32_t client_id, uint64_t ack_seq_num) {}
 
 int64_t PostgresClientDatabase::getPosition(uint32_t client_id, uint32_t symbol_id) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -154,12 +161,10 @@ void PostgresClientDatabase::update_on_execution(const OrderResponseT* resp, boo
     }
     if ((EXEC_MASK_UPSERT_OPEN >> resp->exec_type) & 1) {
         addOrUpdateOpenOrder(resp);
-    } else if ((EXEC_MASK_REMOVE_OPEN >> resp->exec_type) & 1) {
+        } else if ((EXEC_MASK_REMOVE_OPEN >> resp->exec_type) & 1) {
         removeOpenOrder(client_id, resp->order_id);
     }
-    if (not_sent) {
-        addPendingResponse(client_id, *resp);
-    }
+    appendResponseLog(client_id, *resp);
 }
 
 void PostgresClientDatabase::addOrUpdateOpenOrder(const OrderResponseT* resp) {

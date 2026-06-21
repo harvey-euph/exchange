@@ -52,6 +52,9 @@ public:
 
     void query_position(uint32_t symbol_id);
 
+    void request_open_orders();
+    void request_position(uint32_t symbol_id);
+
     int run();
     void stop();
 
@@ -66,6 +69,7 @@ protected:
     std::unique_ptr<SimpleWSClient> md_client_;
     bool running_ = true;
     uint64_t next_id_ = 1000001;
+    uint64_t o_seq_num_ = 0;
 
     std::atomic<bool> ready_{false};
     std::mutex ready_mtx_;

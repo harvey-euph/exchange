@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS symbols (
 CREATE TABLE IF NOT EXISTS clients (
     client_id SERIAL PRIMARY KEY,
     username VARCHAR(64) NOT NULL UNIQUE,
+    i_seq_num BIGINT NOT NULL DEFAULT 0,
+    o_seq_num BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -36,12 +38,16 @@ CREATE TABLE IF NOT EXISTS open_orders (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE SEQUENCE IF NOT EXISTS global_seq_num_seq;
+
 CREATE TABLE IF NOT EXISTS pending_responses (
-    response_id BIGSERIAL PRIMARY KEY,
+    o_seq_num BIGINT NOT NULL,
+    g_seq_num BIGINT NOT NULL DEFAULT nextval('global_seq_num_seq'),
     client_id INTEGER REFERENCES clients(client_id) ON DELETE CASCADE,
     exec_id BIGINT NOT NULL,
     serialized_data BYTEA NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (client_id, o_seq_num)
 );
 
 CREATE INDEX IF NOT EXISTS idx_pending_responses_client ON pending_responses(client_id);

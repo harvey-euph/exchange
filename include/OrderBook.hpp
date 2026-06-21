@@ -101,7 +101,7 @@ private:
     void removePriceLevel(PriceLevel* pl, Side side);
     void sendResponse(ExecType exec_type, uint64_t order_id, uint32_t client_id,
                       uint64_t exec_id, Side side, int64_t p, uint64_t q,
-                      RejectCode reject_code = RejectCode_None);
+                      RejectCode reject_code = RejectCode_None, uint64_t orig_msg_seq_num = 0);
 
     template <typename T> void handleNewOrder(const RequestView<T>& req, bool report_ack = true);
     template <typename T> void handleCancelOrder(const RequestView<T>& req, bool report_cancelled = true);

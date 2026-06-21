@@ -14,6 +14,9 @@ import { ClientRequest } from '../fbs/exchange/client-request';
 import { ClientRequestData as ClientReqData } from '../fbs/exchange/client-request-data';
 import { AdminRequest } from '../fbs/exchange/admin-request';
 import { AdminAction } from '../fbs/exchange/admin-action';
+import { AdminResponse } from '../fbs/exchange/admin-response';
+import { AdminResponseType } from '../fbs/exchange/admin-response-type';
+import { OpenOrderRequest } from '../fbs/exchange/open-order-request';
 import { PositionRequest } from '../fbs/exchange/position-request';
 import { RejectCode } from '../fbs/exchange/reject-code';
 import type { OrderData, ConnectedState, SymbolPosition, SymbolInfoData } from '../types';
@@ -93,6 +96,8 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
   const notifiedExecIds = useRef<Set<string>>(new Set());
   const mgmtReadyNotifiedRef = useRef(false);
   const isInitialLoginRef = useRef(true);
+  const clientSeqNumRef = useRef<bigint>(1n);
+  const serverSeqNumRef = useRef<bigint>(0n);
 
   const bidsRef = useRef<Map<bigint, bigint>>(new Map());
   const asksRef = useRef<Map<bigint, bigint>>(new Map());
@@ -447,6 +452,8 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
       AdminRequest.addAction(builder, AdminAction.LogOn);
       AdminRequest.addClientId(builder, numericClientId);
       AdminRequest.addUsername(builder, usernameOffset);
+      AdminRequest.addMsgSeqNum(builder, clientSeqNumRef.current);
+      AdminRequest.addAckSeqNum(builder, serverSeqNumRef.current);
       const adminReqOffset = AdminRequest.endAdminRequest(builder);
 
       ClientRequest.startClientRequest(builder);
@@ -506,6 +513,81 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
             }
             addMgmtLog(`Position Sync: Sym=${sId} Qty=${qty}`);
             if (sId !== 0) subscribeL2(sId);
+          }
+        } else if (dataType === ClientResponseData.AdminResponse) {
+          const adminResp = response.data(new AdminResponse()) as AdminResponse;
+          if (adminResp && adminResp.type() === AdminResponseType.Ready) {
+            setConnected(prev => ({ ...prev, mgmtReady: true }));
+            if (!mgmtReadyNotifiedRef.current) {
+              if (isInitialLoginRef.current) {
+                onNotification?.('info', 'System', 'Log in success');
+                isInitialLoginRef.current = false;
+              }
+              mgmtReadyNotifiedRef.current = true;
+            }
+
+            addMgmtLog(`Admin Ready received. Requesting open orders and positions...`);
+            
+            const builder = new flatbuffers.Builder(256);
+            
+            // Request open orders
+            OpenOrderRequest.startOpenOrderRequest(builder);
+            OpenOrderRequest.addClientId(builder, numericClientId);
+            const openReqOffset = OpenOrderRequest.endOpenOrderRequest(builder);
+            
+            ClientRequest.startClientRequest(builder);
+            ClientRequest.addDataType(builder, ClientReqData.OpenOrderRequest);
+            ClientRequest.addData(builder, openReqOffset);
+            const clientReqOffset = ClientRequest.endClientRequest(builder);
+            builder.finish(clientReqOffset);
+            ws.send(builder.asUint8Array() as any);
+            
+            // Request positions (for all cached symbols)
+            const cachedSymbols = [0];
+            if (activeSymbolId > 0 && !isNaN(activeSymbolId)) {
+                cachedSymbols.push(activeSymbolId);
+            }
+            for (const sym of cachedSymbols) {
+               builder.clear();
+               PositionRequest.startPositionRequest(builder);
+               PositionRequest.addClientId(builder, numericClientId);
+               PositionRequest.addSymbolId(builder, sym);
+               const posReqOffset = PositionRequest.endPositionRequest(builder);
+               
+               ClientRequest.startClientRequest(builder);
+               ClientRequest.addDataType(builder, ClientReqData.PositionRequest);
+               ClientRequest.addData(builder, posReqOffset);
+               const crOffset = ClientRequest.endClientRequest(builder);
+               builder.finish(crOffset);
+               ws.send(builder.asUint8Array() as any);
+            }
+          } else if (adminResp && adminResp.type() === AdminResponseType.Reject) {
+            const reasonCode = adminResp.rejectCode();
+            addMgmtLog(`Admin Login Rejected: code=${RejectCode[reasonCode] || reasonCode}`);
+            
+            if (reasonCode === RejectCode.InvalidSequenceNumber) {
+                clientSeqNumRef.current = adminResp.expectedMsgSeqNum();
+                serverSeqNumRef.current = adminResp.expectedAckSeqNum();
+                
+                addMgmtLog(`Resyncing seq numbers to Msg=${clientSeqNumRef.current}, Ack=${serverSeqNumRef.current} and retrying LogOn`);
+                const builder = new flatbuffers.Builder(256);
+                const usernameOffset = builder.createString(clientId);
+                AdminRequest.startAdminRequest(builder);
+                AdminRequest.addAction(builder, AdminAction.LogOn);
+                AdminRequest.addClientId(builder, numericClientId);
+                AdminRequest.addUsername(builder, usernameOffset);
+                AdminRequest.addMsgSeqNum(builder, clientSeqNumRef.current);
+                AdminRequest.addAckSeqNum(builder, serverSeqNumRef.current);
+                const adminReqOffset = AdminRequest.endAdminRequest(builder);
+
+                ClientRequest.startClientRequest(builder);
+                ClientRequest.addDataType(builder, ClientReqData.AdminRequest);
+                ClientRequest.addData(builder, adminReqOffset);
+                const clientReqOffset = ClientRequest.endClientRequest(builder);
+
+                builder.finish(clientReqOffset);
+                ws.send(builder.asUint8Array() as any);
+            }
           }
         }
       } catch (err) { addMgmtLog(`Decode Error: ${err}`); }
@@ -714,6 +796,10 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
     OrderRequest.addQ(builder, qVal);
     OrderRequest.addVisibleQty(builder, qVal);
     OrderRequest.addTimestamp(builder, BigInt(Date.now()));
+    
+    clientSeqNumRef.current += 1n;
+    OrderRequest.addMsgSeqNum(builder, clientSeqNumRef.current);
+
     const off = OrderRequest.endOrderRequest(builder);
     ClientRequest.startClientRequest(builder);
     ClientRequest.addDataType(builder, ClientReqData.OrderRequest);
@@ -739,6 +825,10 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
     OrderRequest.addSymbolId(builder, order.symbolId);
     OrderRequest.addSide(builder, order.side);
     OrderRequest.addTimestamp(builder, BigInt(Date.now()));
+
+    clientSeqNumRef.current += 1n;
+    OrderRequest.addMsgSeqNum(builder, clientSeqNumRef.current);
+
     const off = OrderRequest.endOrderRequest(builder);
     ClientRequest.startClientRequest(builder);
     ClientRequest.addDataType(builder, ClientReqData.OrderRequest);
@@ -772,7 +862,12 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
     OrderRequest.addP(builder, pVal);
     
     OrderRequest.addQ(builder, BigInt(newQty));
+    OrderRequest.addVisibleQty(builder, BigInt(newQty));
     OrderRequest.addTimestamp(builder, BigInt(Date.now()));
+
+    clientSeqNumRef.current += 1n;
+    OrderRequest.addMsgSeqNum(builder, clientSeqNumRef.current);
+
     const off = OrderRequest.endOrderRequest(builder);
     ClientRequest.startClientRequest(builder);
     ClientRequest.addDataType(builder, ClientReqData.OrderRequest);
