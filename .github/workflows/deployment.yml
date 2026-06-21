@@ -60,5 +60,5 @@ jobs:
             git reset --hard origin/main
             make -j$(nproc)
             sudo ./kill-all
-            sudo ./run-serices
+            sudo ./run-services
             ./run-mm-native
