@@ -1,11 +1,12 @@
 #include "MarketDataServer.hpp"
 #include <iostream>
+#include "define.hpp"
 
 namespace Exchange {
 
-MarketDataServer::MarketDataServer(int port, SHMRingBuffer* ring_buffer)
+MarketDataServer::MarketDataServer(int port, mmaplog::MmapReader* response_ring)
     : ws_adaptor_(std::make_shared<WSAdaptor>(port))
-    , ring_buffer_(ring_buffer)
+    , response_ring_(response_ring)
 {
     setup_handlers();
 }
@@ -20,26 +21,29 @@ int MarketDataServer::poll_client() {
 
 int MarketDataServer::poll_server()
 {
-    auto slot = ring_buffer_->acquire();
-    if (!slot) return 0;
-
-    if (slot->payload != nullptr && slot->size > 0) {
-        process_market_update(slot->payload, slot->size);
+    const void* data = nullptr;
+    uint32_t len = 0;
+    if (response_ring_->read_next(data, len)) {
+        if (len >= sizeof(OrderResponseT)) {
+            const OrderResponseT* resp = reinterpret_cast<const OrderResponseT*>(data);
+            process_market_update(resp);
+        }
+        return 1;
     }
-    ring_buffer_->release(*slot);
-    return 1;
+    return 0;
 }
 
-std::shared_ptr<L3Book> MarketDataServer::get_or_create_book(uint32_t symbol_id) {
+std::pair<std::shared_ptr<L3Book>, OrderResponseT*> MarketDataServer::get_or_create_book(uint32_t symbol_id) {
     std::lock_guard<std::mutex> lock(books_mutex_);
     auto it = books_.find(symbol_id);
     if (it == books_.end()) {
         auto book = std::make_shared<L3Book>();
         book->symbol_id = symbol_id;
-        books_[symbol_id] = book;
-        return book;
+        auto& state = books_[symbol_id];
+        state.book = book;
+        return {state.book, nullptr};
     }
-    return it->second;
+    return {it->second.book, it->second.pending};
 }
 
 void MarketDataServer::setup_handlers() {
@@ -82,7 +86,7 @@ void MarketDataServer::handle_market_data_request(WSClientPtr client, const Mark
     }
 
     if (sub_type == SubType_subscribe) {
-        auto book = get_or_create_book(symbol_id);
+        auto [book, pending_ptr] = get_or_create_book(symbol_id);
 
         if (md_type == MDType_L2) {
             {
@@ -168,22 +172,18 @@ void MarketDataServer::handle_market_data_request(WSClientPtr client, const Mark
     }
 }
 
-void MarketDataServer::process_market_update(const void* data_ptr, size_t data_size) {
-    (void)data_size;
-    auto l3_update_root = flatbuffers::GetRoot<L3Update>(data_ptr);
-    uint32_t symbol_id = l3_update_root->symbol_id();
-    auto book = get_or_create_book(symbol_id);
+bool MarketDataServer::crosses(Side side, int64_t price, const std::shared_ptr<L3Book>& book) const {
+    if (side == Side_Buy) {
+        if (book->asks.empty()) return false;
+        return price == 0 || price >= book->asks.begin()->first;
+    } else if (side == Side_Sell) {
+        if (book->bids.empty()) return false;
+        return price == 0 || price <= book->bids.begin()->first;
+    }
+    return false;
+}
 
-    // Update the single local L3Book
-    book->update(
-        l3_update_root->exec_type(),
-        l3_update_root->order_id(),
-        l3_update_root->side(),
-        l3_update_root->p(),
-        l3_update_root->q()
-    );
-
-    // Check L3 Subscribers
+void MarketDataServer::publish_l3_update(uint32_t symbol_id, ExecType exec_type, uint64_t order_id, Side side, int64_t p, uint64_t q, uint64_t msg_seq_num, uint64_t timestamp) {
     bool has_l3_subs = false;
     {
         std::lock_guard<std::mutex> lock(subs_mutex_);
@@ -192,86 +192,81 @@ void MarketDataServer::process_market_update(const void* data_ptr, size_t data_s
             has_l3_subs = true;
         }
     }
-    if (has_l3_subs) {
-        flatbuffers::FlatBufferBuilder fbb(512);
-        auto l3_update = CreateL3Update(
-            fbb, symbol_id,
-            l3_update_root->exec_type(),
-            l3_update_root->seq_num(),
-            l3_update_root->order_id(),
-            l3_update_root->side(),
-            l3_update_root->p(),
-            l3_update_root->q(),
-            l3_update_root->timestamp()
-        );
-        auto md_update = CreateMarketDataUpdate(fbb, MarketDataUpdateData_L3Update, l3_update.Union());
-        fbb.Finish(md_update);
+    if (!has_l3_subs) return;
 
-        std::lock_guard<std::mutex> lock(subs_mutex_);
-        for (auto& client : l3_subscribers_[symbol_id]) {
-            client->send(fbb.GetBufferPointer(), fbb.GetSize());
-        }
+    flatbuffers::FlatBufferBuilder fbb(512);
+    auto l3_update = CreateL3Update(fbb, symbol_id, exec_type, msg_seq_num, order_id, side, p, q, timestamp);
+    auto md_update = CreateMarketDataUpdate(fbb, MarketDataUpdateData_L3Update, l3_update.Union());
+    fbb.Finish(md_update);
+
+    std::lock_guard<std::mutex> lock(subs_mutex_);
+    for (auto& client : l3_subscribers_[symbol_id]) {
+        client->send(fbb.GetBufferPointer(), fbb.GetSize());
     }
+}
 
-    // Check L2 Subscribers
+void MarketDataServer::publish_l2_update(uint32_t symbol_id, Side side, int64_t price, uint64_t new_qty, uint64_t msg_seq_num, uint64_t timestamp) {
     bool has_l2_subs = false;
     {
         std::lock_guard<std::mutex> lock(subs_mutex_);
         auto it = l2_subscribers_.find(symbol_id);
-        if (it != l2_subscribers_.end() && !it->second.empty() /* TODO: remove symbol when last subscriber unsub, so no need to check it->second.empty() */) { 
+        if (it != l2_subscribers_.end() && !it->second.empty()) { 
             has_l2_subs = true;
         }
     }
-    if (has_l2_subs) {
-        flatbuffers::FlatBufferBuilder fbb(512);
+    if (!has_l2_subs) return;
 
-        if (l3_update_root->side() == Side_None) {
-            // Handle complete/clear
-            auto l2_update = CreateL2Update(fbb, symbol_id, l3_update_root->seq_num(), Side_None, 0, 0, l3_update_root->timestamp());
-            auto md_update = CreateMarketDataUpdate(fbb, MarketDataUpdateData_L2Update, l2_update.Union());
-            fbb.Finish(md_update);
+    flatbuffers::FlatBufferBuilder fbb(512);
+    auto l2_update = CreateL2Update(fbb, symbol_id, msg_seq_num, side, price, new_qty, timestamp);
+    auto md_update = CreateMarketDataUpdate(fbb, MarketDataUpdateData_L2Update, l2_update.Union());
+    fbb.Finish(md_update);
 
-            std::lock_guard<std::mutex> lock(subs_mutex_);
-            for (auto& client : l2_subscribers_[symbol_id]) {
-                client->send(fbb.GetBufferPointer(), fbb.GetSize());
-            }
-        } else {
-            // Standard update: get the price level total qty
-            int64_t price = l3_update_root->p();
-            Side side = l3_update_root->side();
-            uint64_t new_qty = 0;
-            {
-                std::lock_guard<std::mutex> lock(book->mutex);
-                if (side == Side_Buy) {
-                    auto level_it = book->bids.find(price);
-                    if (level_it != book->bids.end()) {
-                        new_qty = level_it->second.total_qty;
-                    }
-                } else if (side == Side_Sell) {
-                    auto level_it = book->asks.find(price);
-                    if (level_it != book->asks.end()) {
-                        new_qty = level_it->second.total_qty;
-                    }
-                }
-            }
-
-            auto l2_update = CreateL2Update(
-                fbb, symbol_id,
-                l3_update_root->seq_num(),
-                l3_update_root->side(),
-                price,
-                new_qty,
-                l3_update_root->timestamp()
-            );
-            auto md_update = CreateMarketDataUpdate(fbb, MarketDataUpdateData_L2Update, l2_update.Union());
-            fbb.Finish(md_update);
-
-            std::lock_guard<std::mutex> lock(subs_mutex_);
-            for (auto& client : l2_subscribers_[symbol_id]) {
-                client->send(fbb.GetBufferPointer(), fbb.GetSize());
-            }
-        }
+    std::lock_guard<std::mutex> lock(subs_mutex_);
+    for (auto& client : l2_subscribers_[symbol_id]) {
+        client->send(fbb.GetBufferPointer(), fbb.GetSize());
     }
+}
+
+void MarketDataServer::process_market_update(const OrderResponseT* resp)
+{
+    auto [book, pending_ptr] = get_or_create_book(resp->symbol_id);
+
+    if (check_exec(resp->exec_type, EXEC_MASK_NOT_EXECUTIONS)) {
+        return;
+    }
+
+    uint64_t timestamp = 0; // Or whatever timestamp we have
+    
+    if (pending_ptr) {
+        if (check_exec(resp->exec_type, EXEC_MASK_LATENCY_TRACK)) {
+            std::cerr << "[MarketDataServer] FATAL: Received new crossing order " << resp->order_id 
+                        << " while pending_order " << pending_ptr->order_id << " is still active!" << std::endl;
+            throw std::runtime_error("Multiple pending orders");
+        } else if (check_exec(resp->exec_type, EXEC_MASK_REMOVE_OPEN) && resp->order_id == pending_ptr->order_id) {
+            delete pending_ptr;
+            pending_ptr = nullptr;
+            return;
+        }
+    } else if ((resp->exec_type == ExecType_New /* TODO: Should support ExecType_Replaced here */) && crosses(resp->side, resp->p, book)) {
+        pending_ptr = new OrderResponseT {*resp};
+        return;
+    }
+
+    validated_update(book, resp, timestamp);
+
+    if (!pending_ptr) return;
+    if ((pending_ptr->exec_type == ExecType_New) && !crosses(pending_ptr->side, pending_ptr->p, book)) {
+        validated_update(book, pending_ptr, timestamp);
+        delete pending_ptr;
+        pending_ptr = nullptr;
+    }
+}
+
+void MarketDataServer::validated_update(std::shared_ptr<L3Book> book, const OrderResponseT* resp, uint64_t timestamp)
+{
+    uint64_t qty_new = book->update(resp->exec_type, resp->order_id, resp->side, resp->p, resp->q);
+    publish_l3_update(resp->symbol_id, resp->exec_type, resp->order_id, resp->side, resp->p, resp->q, resp->msg_seq_num, timestamp);
+    publish_l2_update(resp->symbol_id, resp->side, resp->p, qty_new, resp->msg_seq_num, timestamp);
 }
 
 } // namespace Exchange

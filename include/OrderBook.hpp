@@ -4,7 +4,6 @@
 #include <atomic>
 #include <cstdint>
 #include <unordered_map>
-#include "L3Updater.hpp"
 #include "fbs/exchange_generated.h"
 #include "ring/SHMRingBuffer.hpp"
 #include "mmap_log.h"
@@ -72,7 +71,6 @@ private:
     const size_t  max_price_levels_;   // price_array_ 大小
     mmaplog::MmapWriter* response_ring_;
     OrderResponseT resp;
-    L3Updater l3;
 
     size_t price_to_index(const int64_t price) const {
         return price / min_step_ - price_index_offset_;

@@ -666,7 +666,7 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
           }
         }
 
-        if (side !== Side.None && symbolInfoRef.current && sId === activeSymbolId) {
+        if (side !== Side.None && q !== BigInt(0) && symbolInfoRef.current && sId === activeSymbolId) {
           const valErr = validatePrice(p, symbolInfoRef.current);
           if (valErr) {
             addMgmtLog(`[Error] Received invalid L2 price: ${valErr}`);

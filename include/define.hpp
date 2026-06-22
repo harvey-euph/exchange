@@ -4,12 +4,10 @@
 
 #define ORDER_REQUEST  "ORDER_REQUEST"
 #define ORDER_RESPONSE "ORDER_RESPONSE"
-#define MARKET_DATA_RING "MARKET_DATA_RING"
 // #define EXCHANGE_TELEMETRY "EXCHANGE_TELEMETRY"
 
 #define ORDER_REQUEST_SIZE  65536
 #define ORDER_RESPONSE_SIZE 131072
-#define MARKET_DATA_RING_SIZE 131072
 
 // Service Ports
 #define PORT_CLIENT_MANAGER 9001
@@ -46,5 +44,20 @@ constexpr uint8_t EXEC_MASK_REMOVE_OPEN = 0b00010100;
 
 // Bitmask to identify immediate client request responses for E2E latency tracking (New, Replaced, & Cancelled)
 constexpr uint8_t EXEC_MASK_LATENCY_TRACK = 0b00110001;
+
+// Cancel & Replace
+constexpr uint8_t EXEC_MASK_CHANGE_OPEN = 0b00110001;
+
+// NEW & Replace
+constexpr uint8_t EXEC_MASK_END_UP_OPEN = 0b00100001;
+
+// Execution
+constexpr uint8_t EXEC_MASK_EXECUTIONS = 0b00111111;
+
+// Non-Execution
+constexpr uint8_t EXEC_MASK_NOT_EXECUTIONS = ~EXEC_MASK_EXECUTIONS;
+
+#define check_exec(type, mask) ((mask) >> (type)) & 1
+
 
 } // namespace Exchange

@@ -21,7 +21,6 @@ OrderBook::OrderBook(
     , price_index_offset_(price_index_offset)
     , max_price_levels_(max_price_levels)
     , response_ring_(response_ring)
-    , l3(MARKET_DATA_RING)
     , price_array_(max_price_levels_)
 {
     resp.symbol_id = symbol_id_;
@@ -69,7 +68,6 @@ void OrderBook::handleNewOrder(const OrderRequestT* req, bool report_ack)
 
     if (report_ack) {
         sendResponse(ExecType_New, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_None, req->msg_seq_num);
-        report_ack = false;
     }
 
     PriceLevel **oppo = &best_levels_[1^side_int];
@@ -102,10 +100,6 @@ void OrderBook::handleNewOrder(const OrderRequestT* req, bool report_ack)
                     maker->order_id, maker->client_id, exec_id, maker_side, p, qty_fill);
             }
 
-            l3.update(symbol_id_, maker->qty_remaining == 0 ? ExecType_Fill : ExecType_PartialFill,
-                maker->order_id, (Exchange::Side)(1^side_int), p, qty_fill
-            );
-
             if (maker->qty_remaining) continue;
 
             active_orders_.erase(maker->order_id);
@@ -122,7 +116,7 @@ void OrderBook::handleNewOrder(const OrderRequestT* req, bool report_ack)
         }
     }
 
-    if (taker->qty_remaining == 0)
+    if (!taker->qty_remaining)
     {
         delete taker;
         return;
@@ -131,15 +125,7 @@ void OrderBook::handleNewOrder(const OrderRequestT* req, bool report_ack)
     PriceLevel* level = GetOrCreatePriceLevel(price_idx, req->side);
     insertOrderToLevel(level, taker, req->side);
 
-    l3.update(symbol_id_, ExecType_New,
-        taker->order_id, req->side, index_to_price(price_idx), taker->qty_remaining
-    );
-
     active_orders_[taker->order_id] = taker;
-
-    if (report_ack) {
-        sendResponse(ExecType_New, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_None, req->msg_seq_num);
-    }
 }
 
 void OrderBook::handleCancelOrder(const OrderRequestT* req, bool report_cancelled)
@@ -160,15 +146,13 @@ void OrderBook::handleCancelOrder(const OrderRequestT* req, bool report_cancelle
 
     const size_t p = index_to_price(pl - price_array_.data());
 
-    l3.update(symbol_id_, ExecType_Cancelled, o->order_id, req->side, p, o->qty_remaining);
-
     if (!pl->order_count)
         removePriceLevel(pl, req->side);
 
-    delete o;
     if (report_cancelled) {
-        sendResponse(ExecType_Cancelled, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_None, req->msg_seq_num);
+        sendResponse(ExecType_Cancelled, o->order_id, o->client_id, req->exec_id, req->side, p, req->q, RejectCode_None, req->msg_seq_num);
     }
+    delete o;
 }
 
 void OrderBook::handleModifyOrder(const OrderRequestT* req)
@@ -201,16 +185,16 @@ void OrderBook::handleModifyOrder(const OrderRequestT* req)
 
         pl->total_qty += qty_diff;
 
-        const size_t p = index_to_price(pl - price_array_.data());
-        l3.update(symbol_id_, ExecType_Replaced, o->order_id, req->side, p, new_qty - executed_qty);
         o->qty_remaining = new_qty - executed_qty;
         o->qty_original = new_qty;
         sendResponse(ExecType_Replaced, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_None, req->msg_seq_num);
         return;
     }
-    handleCancelOrder(req, false);
-    handleNewOrder(req, false);
-    sendResponse(ExecType_Replaced, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_None, req->msg_seq_num);
+    // TODO: Use ExecType_Replaced to handle
+    // TODO: Check why making qty up still go to short path
+    // sendResponse(ExecType_Replaced, req->order_id, req->client_id, req->exec_id, req->side, req->p, req->q, RejectCode_None, req->msg_seq_num);
+    handleCancelOrder(req);
+    handleNewOrder(req);
 }
 
 void OrderBook::processRequest(const OrderRequestT* req)

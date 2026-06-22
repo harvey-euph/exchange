@@ -21,9 +21,7 @@ int main()
     setup_signals();
 
     std::vector<std::string> ring_names = {
-        ORDER_REQUEST,
-        ORDER_RESPONSE,
-        MARKET_DATA_RING
+        ORDER_REQUEST
     };
 
     std::vector<RingInfo> rings;

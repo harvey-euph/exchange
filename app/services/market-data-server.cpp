@@ -14,19 +14,19 @@ int main() {
         set_thread_affinity(main_core, "MarketDataServer");
     }
 
-    std::cout << "[MarketDataServer] Connecting to SHMRingBuffer: " << MARKET_DATA_RING << " (size: " << MARKET_DATA_RING_SIZE << ")..." << std::endl;
-    SHMRingBuffer* ring_buffer = nullptr;
+    std::cout << "[MarketDataServer] Connecting to Response Ring..." << std::endl;
+    mmaplog::MmapReader* response_ring = nullptr;
     try {
-        ring_buffer = new SHMRingBuffer(MARKET_DATA_RING, MARKET_DATA_RING_SIZE);
+        response_ring = new mmaplog::MmapReader("./log/execution-journals");
     } catch (const std::exception& e) {
         std::cerr << "[MarketDataServer] FATAL: " << e.what() << std::endl;
         return -1;
     }
 
-    std::cout << "[MarketDataServer] Polling ring buffer and WebSocket events..." << std::endl;
-    MarketDataServer server(PORT_MARKET_DATA_SERVER, ring_buffer);
+    std::cout << "[MarketDataServer] Polling response ring and WebSocket events..." << std::endl;
+    MarketDataServer server(PORT_MARKET_DATA_SERVER, response_ring);
     server.run();
 
-    delete ring_buffer;
+    delete response_ring;
     return 0;
 }
