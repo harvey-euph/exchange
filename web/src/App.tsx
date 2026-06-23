@@ -18,6 +18,7 @@ function App() {
   const [price, setPrice] = useState('5000');
   const [quantity, setQuantity] = useState('100');
   const [side, setSide] = useState<Side>(Side.Buy);
+  const [orderType, setOrderType] = useState<OrderType>(OrderType.Limit);
   const [peggedLevel, setPeggedLevel] = useState<number | null>(null);
   const [hasLoggedIn, setHasLoggedIn] = useState(false);
   const [activeTab, setActiveTab] = useState<'orders' | 'positions'>('orders');
@@ -99,7 +100,9 @@ function App() {
     }
 
     let finalPrice = price;
-    if (peggedLevel !== null) {
+    if (orderType === OrderType.Market) {
+      finalPrice = '0';
+    } else if (peggedLevel !== null) {
       // Resolve pegged price at the moment of send.
       // sortedBids/sortedAsks carry raw mantissa bigints — use formatPrice so
       // parsePrice inside sendOrder applies priceExp exactly once.
@@ -122,7 +125,7 @@ function App() {
       }
     }
 
-    sendOrder(orderSide, clientId, symbolId, finalPrice, quantity);
+    sendOrder(orderSide, clientId, symbolId, finalPrice, quantity, orderType);
   };
   
   const handleCancelOrder = (order: any) => cancelOrder(order, clientId);
@@ -134,9 +137,8 @@ function App() {
       return;
     }
     const oppositeSide = flattenSide === Side.Buy ? Side.Sell : Side.Buy;
-    const markPrice = prices.get(sId) || 0n;
-    sendOrder(oppositeSide, clientId, sId.toString(), markPrice.toString(), flattenQuantity.toString(), OrderType.Market);
-  }, [connected.mgmtReady, clientId, prices, sendOrder, handleNotification]);
+    sendOrder(oppositeSide, clientId, sId.toString(), '0', flattenQuantity.toString(), OrderType.Market);
+  }, [connected.mgmtReady, clientId, sendOrder, handleNotification]);
 
   const handleLogin = () => {
     connectMgmt(clientId, symbolId);
@@ -285,6 +287,7 @@ function App() {
                 setClientId={setClientId}
                 onLogin={handleLogin}
                 price={price} quantity={quantity} side={side} peggedLevel={peggedLevel}
+                orderType={orderType} setOrderType={setOrderType}
                 setPrice={setPrice} setQuantity={setQuantity} setSide={setSide} setPeggedLevel={setPeggedLevel}
                 onSendOrder={handleSendOrder}
                 cash={cash}

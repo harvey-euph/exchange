@@ -1,5 +1,6 @@
 import React from 'react';
 import { Side } from '../fbs/exchange/side';
+import { OrderType } from '../fbs/exchange/order-type';
 import { NumericInput } from './NumericInput';
 import { formatPrice } from '../types';
 
@@ -21,6 +22,9 @@ interface OrderEntryProps {
   setPeggedLevel: (p: number | null) => void;
   onSendOrder: (side: Side) => void;
   
+  orderType: OrderType;
+  setOrderType: (t: OrderType) => void;
+
   cash?: bigint;
   disabled?: boolean;
   priceExp?: number;
@@ -33,7 +37,7 @@ export const OrderEntry: React.FC<OrderEntryProps> = ({
   isLoggedIn, clientId, setClientId, onLogin,
   price, quantity, side, peggedLevel, 
   setPrice, setQuantity, setSide, setPeggedLevel,
-  onSendOrder, cash, disabled, priceExp, priceMinStep,
+  onSendOrder, orderType, setOrderType, cash, disabled, priceExp, priceMinStep,
   sortedBids, sortedAsks
 }) => {
 
@@ -149,22 +153,50 @@ export const OrderEntry: React.FC<OrderEntryProps> = ({
           </div>
         </div>
 
+        {/* Type Selection */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ width: '60px', fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 500 }}>Type</div>
+          <div style={{ display: 'flex', gap: '16px', fontSize: '13px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+              <input 
+                type="radio" 
+                name="orderType" 
+                checked={orderType === OrderType.Limit} 
+                onChange={() => setOrderType(OrderType.Limit)}
+                disabled={disabled}
+              />
+              Limit
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+              <input 
+                type="radio" 
+                name="orderType" 
+                checked={orderType === OrderType.Market} 
+                onChange={() => { setOrderType(OrderType.Market); setPeggedLevel(null); }}
+                disabled={disabled}
+              />
+              Market
+            </label>
+          </div>
+        </div>
+
         {/* Price Input */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div style={{ width: '60px', fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 500 }}>Price</div>
           <NumericInput 
-            value={peggedLevel !== null ? getPegDisplay() : price} 
-            realizedValue={realizedPrice}
+            value={orderType === OrderType.Market ? 'MARKET' : (peggedLevel !== null ? getPegDisplay() : price)} 
+            realizedValue={orderType === OrderType.Market ? undefined : realizedPrice}
             onChange={handlePriceChange} 
             step={priceDisplayStep}
             style={{ 
               flex: 1, 
               height: '32px', 
               boxSizing: 'border-box',
-              color: peggedLevel !== null ? 'var(--accent-blue)' : '#fff',
-              fontFamily: 'var(--font-mono)'
+              color: orderType === OrderType.Market || peggedLevel !== null ? 'var(--accent-blue)' : '#fff',
+              fontFamily: 'var(--font-mono)',
+              opacity: orderType === OrderType.Market ? 0.6 : 1
             }} 
-            disabled={disabled}
+            disabled={disabled || orderType === OrderType.Market}
             allowDecimal
           />
         </div>
