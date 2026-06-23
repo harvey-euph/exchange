@@ -181,20 +181,33 @@ private:
                 handle_asks();
             }
         } else {
-            // Not a fetch tick: randomly jitter qty of existing orders
+            // Not a fetch tick: randomly jitter qty of existing orders or make the book jump
             if (!open_orders.empty()) {
-                // Modify 1 to 3 random orders to simulate activity
-                int mods = std::uniform_int_distribution<int>(1, 3)(gen_);
-                for (int m = 0; m < mods; ++m) {
-                    size_t idx = std::uniform_int_distribution<size_t>(0, open_orders.size() - 1)(gen_);
-                    const auto& o = open_orders[idx];
-                    int64_t qty_change = std::uniform_int_distribution<int>(-5, 5)(gen_);
-                    int64_t new_q = static_cast<int64_t>(o.q) + qty_change;
-                    if (new_q < 5) new_q = 5;
-                    if (new_q > 50) new_q = 50;
-                    
-                    if (new_q != static_cast<int64_t>(o.q)) {
-                        replace_order(o.order_id, o.p, new_q, o.symbol_id, o.side);
+                bool jump_book = (std::uniform_int_distribution<int>(1, 10)(gen_) == 1);
+                if (jump_book && !bids.empty() && !asks.empty()) {
+                    int64_t bid_out = last_est_ticks_ - (target_levels + 5) * step;
+                    int64_t ask_out = last_est_ticks_ + (target_levels + 5) * step;
+                    if (it != symbols_info_.end()) {
+                        bid_out = std::max(it->second->price_min, bid_out);
+                        ask_out = std::min(it->second->price_max, ask_out);
+                    }
+                    // Replace innermost to outermost
+                    replace_order(bids[0].order_id, bid_out, bids[0].q, bids[0].symbol_id, bids[0].side);
+                    replace_order(asks[0].order_id, ask_out, asks[0].q, asks[0].symbol_id, asks[0].side);
+                } else {
+                    // Modify 1 to 3 random orders to simulate activity
+                    int mods = std::uniform_int_distribution<int>(1, 3)(gen_);
+                    for (int m = 0; m < mods; ++m) {
+                        size_t idx = std::uniform_int_distribution<size_t>(0, open_orders.size() - 1)(gen_);
+                        const auto& o = open_orders[idx];
+                        int64_t qty_change = std::uniform_int_distribution<int>(-5, 5)(gen_);
+                        int64_t new_q = static_cast<int64_t>(o.q) + qty_change;
+                        if (new_q < 5) new_q = 5;
+                        if (new_q > 50) new_q = 50;
+                        
+                        if (new_q != static_cast<int64_t>(o.q)) {
+                            replace_order(o.order_id, o.p, new_q, o.symbol_id, o.side);
+                        }
                     }
                 }
             }
