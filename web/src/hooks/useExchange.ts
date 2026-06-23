@@ -102,6 +102,7 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
   const bidsRef = useRef<Map<bigint, bigint>>(new Map());
   const asksRef = useRef<Map<bigint, bigint>>(new Map());
   const pricesRef = useRef<Map<number, bigint>>(new Map());
+  const lastBookSymbolIdRef = useRef<number>(0);
 
   // Periodically flush market data refs to React state (throttle renders)
   useEffect(() => {
@@ -187,40 +188,49 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
 
   // 2. Clear bids/asks and subscribe to L2 when activeSymbolId, connected.l2, or symbolInfo changes
   useEffect(() => {
-    setBids(new Map());
-    setAsks(new Map());
-    bidsRef.current.clear();
-    asksRef.current.clear();
+    if (lastBookSymbolIdRef.current !== activeSymbolId) {
+      setBids(new Map());
+      setAsks(new Map());
+      bidsRef.current.clear();
+      asksRef.current.clear();
+      lastBookSymbolIdRef.current = activeSymbolId;
+    }
 
     if (activeSymbolId <= 0 || isNaN(activeSymbolId)) return;
 
     if (connected.l2 && symbolInfo && symbolInfo.symbolId === activeSymbolId) {
       if (l2WsRef.current?.readyState === WebSocket.OPEN) {
-        const builder = new flatbuffers.Builder(128);
-        MarketDataRequest.startMarketDataRequest(builder);
-        MarketDataRequest.addSymbolId(builder, activeSymbolId);
-        MarketDataRequest.addMdType(builder, MDType.L2);
-        MarketDataRequest.addSubType(builder, SubType.subscribe);
-        const offset = MarketDataRequest.endMarketDataRequest(builder);
-        MarketDataRequest.finishMarketDataRequestBuffer(builder, offset);
-        l2WsRef.current.send(builder.asUint8Array() as any);
-        setSubscribedSymbols(prev => new Set(prev).add(activeSymbolId));
+        setSubscribedSymbols(prev => {
+          if (prev.has(activeSymbolId)) return prev;
+          const builder = new flatbuffers.Builder(128);
+          MarketDataRequest.startMarketDataRequest(builder);
+          MarketDataRequest.addSymbolId(builder, activeSymbolId);
+          MarketDataRequest.addMdType(builder, MDType.L2);
+          MarketDataRequest.addSubType(builder, SubType.subscribe);
+          const offset = MarketDataRequest.endMarketDataRequest(builder);
+          MarketDataRequest.finishMarketDataRequestBuffer(builder, offset);
+          l2WsRef.current!.send(builder.asUint8Array() as any);
+          return new Set(prev).add(activeSymbolId);
+        });
       }
     }
   }, [activeSymbolId, connected.l2, symbolInfo]);
 
   const subscribeL2 = useCallback((sId: number) => {
-    if (l2WsRef.current?.readyState === WebSocket.OPEN) {
-      const builder = new flatbuffers.Builder(128);
-      MarketDataRequest.startMarketDataRequest(builder);
-      MarketDataRequest.addSymbolId(builder, sId);
-      MarketDataRequest.addMdType(builder, MDType.L2);
-      MarketDataRequest.addSubType(builder, SubType.subscribe);
-      const offset = MarketDataRequest.endMarketDataRequest(builder);
-      MarketDataRequest.finishMarketDataRequestBuffer(builder, offset);
-      l2WsRef.current.send(builder.asUint8Array() as any);
-      setSubscribedSymbols(prev => new Set(prev).add(sId));
-    }
+    setSubscribedSymbols(prev => {
+      if (prev.has(sId)) return prev;
+      if (l2WsRef.current?.readyState === WebSocket.OPEN) {
+        const builder = new flatbuffers.Builder(128);
+        MarketDataRequest.startMarketDataRequest(builder);
+        MarketDataRequest.addSymbolId(builder, sId);
+        MarketDataRequest.addMdType(builder, MDType.L2);
+        MarketDataRequest.addSubType(builder, SubType.subscribe);
+        const offset = MarketDataRequest.endMarketDataRequest(builder);
+        MarketDataRequest.finishMarketDataRequestBuffer(builder, offset);
+        l2WsRef.current.send(builder.asUint8Array() as any);
+      }
+      return new Set(prev).add(sId);
+    });
   }, []);
 
   const handleOrderResponse = useCallback((resp: OrderResponse) => {
@@ -624,27 +634,23 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
       setConnected(prev => ({ ...prev, l2: true }));
       addL2Log('Connected');
       // Resubscribe to previous symbols if any
-      subscribedSymbols.forEach(sId => {
-        const builder = new flatbuffers.Builder(128);
-        MarketDataRequest.startMarketDataRequest(builder);
-        MarketDataRequest.addSymbolId(builder, sId);
-        MarketDataRequest.addMdType(builder, MDType.L2);
-        MarketDataRequest.addSubType(builder, SubType.subscribe);
-        const offset = MarketDataRequest.endMarketDataRequest(builder);
-        MarketDataRequest.finishMarketDataRequestBuffer(builder, offset);
-        ws.send(builder.asUint8Array() as any);
+      setSubscribedSymbols(prev => {
+        const next = new Set(prev);
+        if (next.size === 0) {
+          next.add(1);
+        }
+        next.forEach(sId => {
+          const builder = new flatbuffers.Builder(128);
+          MarketDataRequest.startMarketDataRequest(builder);
+          MarketDataRequest.addSymbolId(builder, sId);
+          MarketDataRequest.addMdType(builder, MDType.L2);
+          MarketDataRequest.addSubType(builder, SubType.subscribe);
+          const offset = MarketDataRequest.endMarketDataRequest(builder);
+          MarketDataRequest.finishMarketDataRequestBuffer(builder, offset);
+          ws.send(builder.asUint8Array() as any);
+        });
+        return next;
       });
-      if (subscribedSymbols.size === 0) {
-        const builder = new flatbuffers.Builder(128);
-        MarketDataRequest.startMarketDataRequest(builder);
-        MarketDataRequest.addSymbolId(builder, 1);
-        MarketDataRequest.addMdType(builder, MDType.L2);
-        MarketDataRequest.addSubType(builder, SubType.subscribe);
-        const offset = MarketDataRequest.endMarketDataRequest(builder);
-        MarketDataRequest.finishMarketDataRequestBuffer(builder, offset);
-        ws.send(builder.asUint8Array() as any);
-        setSubscribedSymbols(new Set([1]));
-      }
     };
 
     ws.onmessage = (event) => {
