@@ -281,23 +281,27 @@ function App() {
               </div>
             </div>
             <div className="right-col">
-              <OrderEntry 
-                isLoggedIn={hasLoggedIn}
-                clientId={clientId}
-                setClientId={setClientId}
-                onLogin={handleLogin}
-                price={price} quantity={quantity} side={side} peggedLevel={peggedLevel}
-                orderType={orderType} setOrderType={setOrderType}
-                setPrice={setPrice} setQuantity={setQuantity} setSide={setSide} setPeggedLevel={setPeggedLevel}
-                onSendOrder={handleSendOrder}
-                cash={cash}
-                disabled={!connected.mgmtReady}
-                priceExp={symbolInfo?.priceExp}
-                priceMinStep={symbolInfo?.priceMinStep}
-                sortedBids={sortedBids}
-                sortedAsks={sortedAsks}
-              />
-              <EmbeddedLog logs={mgmtLogs} onClear={clearMgmtLogs} />
+              <div className="order-entry-wrapper">
+                <OrderEntry 
+                  isLoggedIn={hasLoggedIn}
+                  clientId={clientId}
+                  setClientId={setClientId}
+                  onLogin={handleLogin}
+                  price={price} quantity={quantity} side={side} peggedLevel={peggedLevel}
+                  orderType={orderType} setOrderType={setOrderType}
+                  setPrice={setPrice} setQuantity={setQuantity} setSide={setSide} setPeggedLevel={setPeggedLevel}
+                  onSendOrder={handleSendOrder}
+                  cash={cash}
+                  disabled={!connected.mgmtReady}
+                  priceExp={symbolInfo?.priceExp}
+                  priceMinStep={symbolInfo?.priceMinStep}
+                  sortedBids={sortedBids}
+                  sortedAsks={sortedAsks}
+                />
+              </div>
+              <div className="embedded-log-wrapper">
+                <EmbeddedLog logs={mgmtLogs} onClear={clearMgmtLogs} />
+              </div>
             </div>
           </div>
         </div>

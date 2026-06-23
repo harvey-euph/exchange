@@ -398,7 +398,15 @@ body {
   }
 
   .right-col {
+    display: contents;
+  }
+
+  .order-entry-wrapper {
     order: 1;
+  }
+
+  .embedded-log-wrapper {
+    order: 3;
   }
 }
 
