@@ -46,14 +46,8 @@ public:
                 // Update position and cash based on the fill quantity and price
                 update_position_and_cash_internal(response->symbol_id(), response->side(), response->q(), response->p());
                 
-                // Update or add to open orders.
-                if (it == open_orders_.end()) {
-                    OrderResponseT order;
-                    response->UnPackTo(&order);
-                    open_orders_.push_back(std::move(order));
-                } else {
-                    response->UnPackTo(&(*it));
-                }
+                // Do not unpack PartialFill into open_orders_ because it contains fill quantity/price,
+                // not the order's requested quantity/price.
                 break;
 
             case ExecType_Fill:
@@ -73,12 +67,20 @@ public:
                 }
                 break;
 
+            case ExecType_Rejected:
+                if (response->reject_code() == RejectCode_OrderNotFound) {
+                    if (it != open_orders_.end()) {
+                        open_orders_.erase(it);
+                    }
+                }
+                break;
+
             case ExecType_Complete:
                 // Synchronization completion marker - ignore for state updates
                 break;
 
             default:
-                // For Reject or other types, we don't update positions/orders
+                // For other types, we don't update positions/orders
                 break;
         }
     }
