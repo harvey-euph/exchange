@@ -37,7 +37,6 @@ ClientManager::ClientManager(int port, SHMRingBuffer* request_ring, mmaplog::Mma
     };
     
     auto message_handler = [this](WSClientPtr client, const void* data, size_t size) {
-        DTRACE_PROBE(exchange, req_entry);
         this->process_client_request(client, data, size);
     };
 
@@ -115,6 +114,7 @@ void ClientManager::handle_client_logout(WSClientPtr client, const AdminRequest*
 
 void ClientManager::process_client_request(WSClientPtr client, const void* data, size_t size)
 {
+    DTRACE_PROBE(exchange, req_entry);
     flatbuffers::Verifier verifier(reinterpret_cast<const uint8_t*>(data), size);
     if (!verifier.VerifyBuffer<ClientRequest>(nullptr)) {
         LOG_WARN("[ClientManager] Received invalid data from a client (failed flatbuffer verification).");
