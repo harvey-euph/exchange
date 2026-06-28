@@ -88,7 +88,7 @@ void ClientManager::handle_client_logon(WSClientPtr ws, const AdminRequest* admi
 
     // Send AdminResponse(Ready)
     flatbuffers::FlatBufferBuilder fbb(128);
-    auto admin_resp = CreateAdminResponse(fbb, AdminResponseType_Ready, client_id, expected_msg_seq_num, expected_ack_seq_num, RejectCode_None, db_->incrementAndGetClientOSeqNum(client_id));
+    auto admin_resp = CreateAdminResponse(fbb, AdminResponseType_Ready, client_id, expected_msg_seq_num, expected_ack_seq_num, RejectCode_None, client->increment_outbound_seq_num());
     auto client_resp = CreateClientResponse(fbb, ClientResponseData_AdminResponse, admin_resp.Union());
     fbb.Finish(client_resp);
     ws->send(fbb.GetBufferPointer(), fbb.GetSize());
