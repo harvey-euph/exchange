@@ -486,13 +486,15 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
         if (dataType === ClientResponseData.OrderResponse) {
           const orderResp = response.data(new OrderResponse()) as OrderResponse;
           if (orderResp) {
-            const expectedSeq = serverSeqNumRef.current + 1n;
-            const seqNum = orderResp.msgSeqNum();
-            if (seqNum !== expectedSeq) {
-              addMgmtLog(`[Error] Sequence number mismatch on OrderResponse. Expected ${expectedSeq}, got ${seqNum}`);
-              onNotification?.('rejected', 'Sequence Error', `Expected ${expectedSeq}, got ${seqNum}`);
+            if (orderResp.execType() !== ExecType.OrderStatus) {
+              const expectedSeq = serverSeqNumRef.current + 1n;
+              const seqNum = orderResp.msgSeqNum();
+              if (seqNum !== expectedSeq) {
+                addMgmtLog(`[Error] Sequence number mismatch on OrderResponse. Expected ${expectedSeq}, got ${seqNum}`);
+                onNotification?.('rejected', 'Sequence Error', `Expected ${expectedSeq}, got ${seqNum}`);
+              }
+              serverSeqNumRef.current = seqNum;
             }
-            serverSeqNumRef.current = seqNum;
             handleOrderResponse(orderResp);
           }
         } else if (dataType === ClientResponseData.PositionResponse) {

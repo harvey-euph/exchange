@@ -226,11 +226,13 @@ int AlgoTradingClient::run() {
             return;
         } else if (resp->data_type() == ClientResponseData_OrderResponse) {
             auto order_resp = resp->data_as_OrderResponse();
-            if (order_resp->msg_seq_num() != i_seq_num_ + 1) {
-                LOG_ERROR("[AlgoTradingClient] Sequence number mismatch. Expected %lu, got %lu", i_seq_num_ + 1, order_resp->msg_seq_num());
-                throw std::runtime_error("Sequence number mismatch on OrderResponse");
+            if (order_resp->exec_type() != ExecType_OrderStatus) {
+                if (order_resp->msg_seq_num() != i_seq_num_ + 1) {
+                    LOG_ERROR("[AlgoTradingClient] Sequence number mismatch. Expected %lu, got %lu", i_seq_num_ + 1, order_resp->msg_seq_num());
+                    throw std::runtime_error("Sequence number mismatch on OrderResponse");
+                }
+                i_seq_num_ = order_resp->msg_seq_num();
             }
-            i_seq_num_ = order_resp->msg_seq_num();
             on_order_response(order_resp);
         } else if (resp->data_type() == ClientResponseData_PositionResponse) {
             on_position_response(resp->data_as_PositionResponse());
