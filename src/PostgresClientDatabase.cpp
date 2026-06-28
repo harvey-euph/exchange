@@ -69,6 +69,7 @@ uint64_t PostgresClientDatabase::getClientISeqNum(uint32_t client_id) { return 0
 void PostgresClientDatabase::setClientISeqNum(uint32_t client_id, uint64_t seq_num) {}
 uint64_t PostgresClientDatabase::getClientOSeqNum(uint32_t client_id) { return 0; }
 uint64_t PostgresClientDatabase::incrementAndGetClientOSeqNum(uint32_t client_id) { return 0; }
+void PostgresClientDatabase::setClientOSeqNum(uint32_t client_id, uint64_t seq_num) {}
 std::vector<OrderResponseT> PostgresClientDatabase::getResponsesSince(uint32_t client_id, uint64_t ack_seq_num) { return {}; }
 void PostgresClientDatabase::acknowledgeResponses(uint32_t client_id, uint64_t ack_seq_num) {}
 

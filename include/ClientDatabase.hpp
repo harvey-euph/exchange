@@ -26,6 +26,7 @@ public:
     virtual uint64_t getClientISeqNum(uint32_t client_id) = 0;
     virtual void setClientISeqNum(uint32_t client_id, uint64_t seq_num) = 0;
     virtual uint64_t getClientOSeqNum(uint32_t client_id) = 0;
+    virtual void setClientOSeqNum(uint32_t client_id, uint64_t seq_num) = 0;
     virtual uint64_t incrementAndGetClientOSeqNum(uint32_t client_id) = 0;
 
     // Unsent OrderResponse lists
@@ -65,6 +66,10 @@ public:
 
     uint64_t getClientOSeqNum(uint32_t client_id) override {
         return o_seq_nums_[client_id];
+    }
+
+    void setClientOSeqNum(uint32_t client_id, uint64_t seq_num) override {
+        o_seq_nums_[client_id] = seq_num;
     }
 
     uint64_t incrementAndGetClientOSeqNum(uint32_t client_id) override {
@@ -204,6 +209,7 @@ public:
     uint64_t getClientISeqNum(uint32_t client_id) override;
     void setClientISeqNum(uint32_t client_id, uint64_t seq_num) override;
     uint64_t getClientOSeqNum(uint32_t client_id) override;
+    void setClientOSeqNum(uint32_t client_id, uint64_t seq_num) override;
     uint64_t incrementAndGetClientOSeqNum(uint32_t client_id) override;
     std::vector<OrderResponseT> getResponsesSince(uint32_t client_id, uint64_t ack_seq_num) override;
     void acknowledgeResponses(uint32_t client_id, uint64_t ack_seq_num) override;

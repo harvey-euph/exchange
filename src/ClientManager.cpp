@@ -20,9 +20,12 @@ ClientManager::ClientManager(int port, SHMRingBuffer* request_ring, mmaplog::Mma
         std::lock_guard<std::mutex> lock(clients_mutex_);
         auto client_ptr = static_cast<CMClientPtr*>(ws->get_super());
         if (client_ptr && *client_ptr) {
-            (*client_ptr)->remove_conn(ws);
-            if ((*client_ptr)->empty()) {
-                clients_.erase((*client_ptr)->client_id());
+            auto client = *client_ptr;
+            client->remove_conn(ws);
+            if (client->empty()) {
+                db_->setClientISeqNum(client->client_id(), client->inbound_seq_num());
+                db_->setClientOSeqNum(client->client_id(), client->outbound_seq_num());
+                clients_.erase(client->client_id());
             }
         }
     });
@@ -108,10 +111,12 @@ void ClientManager::handle_client_logout(WSClientPtr ws, const AdminRequest* adm
     auto client_ptr = static_cast<CMClientPtr*>(ws->get_super());
     if (client_ptr && *client_ptr) {
         auto client = *client_ptr;
-        db_->setClientISeqNum(client_id, client->inbound_seq_num());
         client->remove_conn(ws);
 
+        std::lock_guard<std::mutex> lock(clients_mutex_);
         if (client->empty()) {
+            db_->setClientISeqNum(client_id, client->inbound_seq_num());
+            db_->setClientOSeqNum(client_id, client->outbound_seq_num());
             clients_.erase(client_id);
         }
     }
@@ -159,15 +164,14 @@ void ClientManager::process_client_request(WSClientPtr ws, const void* data, siz
             if (order_req->msg_seq_num() != expected_i_seq) {
                 LOG_WARN("[ClientManager] Order seqnum mismatch. Expected %lu, got %lu", expected_i_seq, order_req->msg_seq_num());
                 flatbuffers::FlatBufferBuilder fbb(128);
-                uint64_t new_o_seq = db_->incrementAndGetClientOSeqNum(client->client_id());
-                client->set_outbound_seq_num(new_o_seq);
+                uint64_t new_o_seq = client->increment_outbound_seq_num();
                 auto resp_offset = CreateOrderResponse(fbb, ExecType_Rejected, order_req->order_id(), order_req->client_id(), order_req->exec_id(), order_req->symbol_id(), order_req->side(), order_req->p(), order_req->q(), RejectCode_InvalidSequenceNumber, new_o_seq, order_req->msg_seq_num());
                 auto client_resp = CreateClientResponse(fbb, ClientResponseData_OrderResponse, resp_offset.Union());
                 fbb.Finish(client_resp);
                 ws->send(fbb.GetBufferPointer(), fbb.GetSize());
                 return;
             }
-            client->set_inbound_seq_num(expected_i_seq);
+            client->increment_inbound_seq_num();
 
             auto token = request_ring_->reserve(sizeof(OrderRequestT));
             if (!token) {
@@ -225,17 +229,28 @@ void ClientManager::handle_execution_response(const OrderResponseT* resp)
     bool not_sent = true;
 
     OrderResponseT mut_resp = *resp;
-    mut_resp.msg_seq_num = db_->incrementAndGetClientOSeqNum(client_id);
 
-    auto it = clients_.find(client_id);
-    if (it != clients_.end() && !it->second->empty()) {
-        auto client = it->second;
+    CMClientPtr client;
+    {
+        std::lock_guard<std::mutex> lock(clients_mutex_);
+        auto it = clients_.find(client_id);
+        if (it != clients_.end()) {
+            client = it->second;
+        }
+    }
+
+    if (client) {
+        mut_resp.msg_seq_num = client->increment_outbound_seq_num();
+    } else {
+        mut_resp.msg_seq_num = db_->incrementAndGetClientOSeqNum(client_id);
+    }
+
+    if (client && !client->empty()) {
         flatbuffers::FlatBufferBuilder fbb(256);
         auto resp_offset = OrderResponse::Pack(fbb, &mut_resp);
         auto client_resp = CreateClientResponse(fbb, ClientResponseData_OrderResponse, resp_offset.Union());
         fbb.Finish(client_resp);
 
-        client->set_outbound_seq_num(mut_resp.msg_seq_num);
         client->send(fbb.GetBufferPointer(), fbb.GetSize());
         not_sent = false;
         DTRACE_PROBE1(exchange, exec_resp_before_db, mut_resp.exec_id);
