@@ -64,7 +64,7 @@ for exe in "${SERVICES[@]}"; do
     run_cmd=$(get_run_cmd "$exe" "$name")
     
     # Run the service in a loop for health check/auto-restart in the background
-    bash -c "while true; do $run_cmd >/dev/null 2>&1; sleep 2; done" "exchange_core_service_$name" &
+    nohup bash -c "while true; do $run_cmd >/dev/null 2>&1; sleep 2; done" "exchange_core_service_$name" >/dev/null 2>&1 &
 done
 
 $SUDO_CMD systemctl start nginx
