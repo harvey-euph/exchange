@@ -3,7 +3,7 @@ namespace Exchange;
 enum Side : byte { Buy = 0, Sell = 1, None = 2 }
 enum OrderType : byte { Limit = 0, Market = 1, IOC = 2, FOK = 3 /* 可再擴充 */ }
 enum OrderAction : byte { New = 0, Cancel = 1, Modify = 2 }
-enum RejectCode : byte { None = 0, PriceInvalid, OrderNotFound, InvalidAction, InvalidModify, DuplicateOrderID, InvalidSequenceNumber, Unknown = -1 }
+enum RejectCode : byte { None = 0, PriceInvalid, OrderNotFound, InvalidAction, InvalidModify, DuplicateOrderID, InvalidSequenceNumber, LoginAtOtherSession, Unknown = -1 }
 enum ExecType : byte { New = 0, PartialFill = 1, Fill = 2, Rejected = 3, Cancelled = 4, Replaced = 5, OrderStatus = 6, Complete = 7}
 
 enum MDType : byte { L1 = 1, L2 = 2, L3 = 3 }

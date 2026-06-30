@@ -16,106 +16,130 @@ ClientManager::ClientManager(int port, SHMRingBuffer* request_ring, mmaplog::Mma
 {
     LOG_INFO("[ClientManager] Initializing on port %d", port);
 
-    ws_adaptor_->set_close_handler([this](WSClientPtr ws) {
-        this->handle_client_logout(ws);
-    });
-    
-    auto message_handler = [this](WSClientPtr client, const void* data, size_t size) {
-        this->process_client_request(client, data, size);
-    };
-
-    ws_adaptor_->set_message_handler(message_handler);
+    CMClient::bind_adaptor(
+        ws_adaptor_,
+        nullptr,
+        [this](CMClientPtr client) {
+            this->handle_client_logout(client);
+        },
+        [this](CMClientPtr client, const void* data, size_t size) {
+            this->process_client_request(client, data, size);
+        }
+    );
     
     LOG_INFO("[ClientManager] WS Handlers registered.");
 }
 
-void ClientManager::handle_client_logon(WSClientPtr ws, const AdminRequest* admin_req)
+void ClientManager::handle_client_logon(CMClientPtr new_client, const AdminRequest* admin_req)
 {
     uint32_t client_id = admin_req->client_id();
-    uint64_t expected_msg_seq_num = db_->getClientISeqNum(client_id) + 1;
-    uint64_t expected_ack_seq_num = db_->getClientOSeqNum(client_id);
-    
     uint64_t client_msg_seq_num = admin_req->msg_seq_num();
     uint64_t client_ack_seq_num = admin_req->ack_seq_num();
 
+    uint64_t expected_msg_seq_num = 0;
+    uint64_t expected_ack_seq_num = 0;
+
+    CMClientPtr old_client;
+
+    {
+        std::lock_guard<std::mutex> lock(clients_mutex_);
+        auto it = clients_.find(client_id);
+        if (it != clients_.end()) {
+            old_client = it->second;
+        }
+    }
+
+    if (old_client) {
+        expected_msg_seq_num = old_client->inbound_seq_num() + 1;
+        expected_ack_seq_num = old_client->outbound_seq_num();
+    } else {
+        expected_msg_seq_num = db_->getClientISeqNum(client_id) + 1;
+        expected_ack_seq_num = db_->getClientOSeqNum(client_id);
+    }
+
     if (client_msg_seq_num != expected_msg_seq_num || client_ack_seq_num > expected_ack_seq_num) {
-        LOG_INFO("[ClientManager] Client %d connection rejected. Expected msg: %d, ack: %d", client_id, expected_msg_seq_num, expected_ack_seq_num);
+        LOG_INFO("[ClientManager] Client %d connection rejected. Expected msg: %ld, ack: %ld", client_id, expected_msg_seq_num, expected_ack_seq_num);
         
         flatbuffers::FlatBufferBuilder fbb(128);
-        auto admin_resp = CreateAdminResponse(fbb, AdminResponseType_Reject, client_id, expected_msg_seq_num, expected_ack_seq_num, RejectCode_InvalidSequenceNumber, db_->incrementAndGetClientOSeqNum(client_id));
+        uint64_t rej_seq_num = old_client ? old_client->increment_outbound_seq_num() : db_->incrementAndGetClientOSeqNum(client_id);
+        auto admin_resp = CreateAdminResponse(fbb, AdminResponseType_Reject, client_id, expected_msg_seq_num, expected_ack_seq_num, RejectCode_InvalidSequenceNumber, rej_seq_num);
         auto client_resp = CreateClientResponse(fbb, ClientResponseData_AdminResponse, admin_resp.Union());
         fbb.Finish(client_resp);
-        ws->send(fbb.GetBufferPointer(), fbb.GetSize());
+        new_client->send(fbb.GetBufferPointer(), fbb.GetSize());
         // Do not store session or mark ready
         return;
     }
 
-    db_->setClientISeqNum(client_id, client_msg_seq_num);
-    db_->acknowledgeResponses(client_id, client_ack_seq_num);
 
-    CMClientPtr client;
+    uint64_t shared_msg_seq_num = 0;
+
     {
         std::lock_guard<std::mutex> lock(clients_mutex_);
-        auto it = clients_.find(client_id);
-        if (it == clients_.end()) {
-            client = std::make_shared<CMClient>(client_id);
-            client->set_client_id(client_id);
-            client->set_inbound_seq_num(client_msg_seq_num);
-            client->set_outbound_seq_num(expected_ack_seq_num);
-            clients_[client_id] = client;
+        if (old_client) {
+            shared_msg_seq_num = old_client->increment_outbound_seq_num();
+            WSClientPtr old_ws = old_client->get_conn();
+            if (old_ws && old_ws != new_client->get_conn()) {
+                flatbuffers::FlatBufferBuilder fbb(128);
+                auto admin_resp = CreateAdminResponse(fbb, AdminResponseType_Reject, client_id, expected_msg_seq_num, expected_ack_seq_num, RejectCode_LoginAtOtherSession, shared_msg_seq_num);
+                auto client_resp = CreateClientResponse(fbb, ClientResponseData_AdminResponse, admin_resp.Union());
+                fbb.Finish(client_resp);
+                old_client->send(fbb.GetBufferPointer(), fbb.GetSize());
+                
+                old_ws->close();
+            }
         } else {
-            client = it->second;
+            shared_msg_seq_num = expected_ack_seq_num + 1;
         }
-        client->add_conn(ws);
-        ws->set_super(&clients_[client_id]);
+        
+        new_client->set_client_id(client_id);
+        new_client->set_inbound_seq_num(client_msg_seq_num);
+        new_client->set_outbound_seq_num(shared_msg_seq_num);
+        clients_[client_id] = new_client;
     }
-    LOG_INFO("[ClientManager] Client %d connected (connections: %zu).", client_id, client->get_conns().size());
+    LOG_INFO("[ClientManager] Client %d connected.", client_id);
     
     // Send missed executions (OrderResponse)
     auto missed_responses = db_->getResponsesSince(client_id, client_ack_seq_num);
-    LOG_INFO("[ClientManager] Sending %d missed responses.", missed_responses.size());
+    LOG_INFO("[ClientManager] Sending %ld missed responses.", missed_responses.size());
     for (auto& resp : missed_responses) {
         flatbuffers::FlatBufferBuilder fbb(256);
         auto resp_offset = OrderResponse::Pack(fbb, &resp);
         auto client_resp = CreateClientResponse(fbb, ClientResponseData_OrderResponse, resp_offset.Union());
         fbb.Finish(client_resp);
-        ws->send(fbb.GetBufferPointer(), fbb.GetSize());
+        new_client->send(fbb.GetBufferPointer(), fbb.GetSize());
         logOrderResponse(flatbuffers::GetRoot<ClientResponse>(fbb.GetBufferPointer())->data_as_OrderResponse(), "[ClientManager] Resending Missed:");
     }
 
     // Set ready for this client session
-    ws->set_ready(true);
+    new_client->set_ready(true);
 
     // Send AdminResponse(Ready)
     flatbuffers::FlatBufferBuilder fbb(128);
-    auto admin_resp = CreateAdminResponse(fbb, AdminResponseType_Ready, client_id, expected_msg_seq_num, expected_ack_seq_num, RejectCode_None, client->increment_outbound_seq_num());
+    auto admin_resp = CreateAdminResponse(fbb, AdminResponseType_Ready, client_id, expected_msg_seq_num, expected_ack_seq_num, RejectCode_None, shared_msg_seq_num);
     auto client_resp = CreateClientResponse(fbb, ClientResponseData_AdminResponse, admin_resp.Union());
     fbb.Finish(client_resp);
-    ws->send(fbb.GetBufferPointer(), fbb.GetSize());
+    new_client->send(fbb.GetBufferPointer(), fbb.GetSize());
     
     LOG_INFO("[ClientManager] Client %d session ready.", client_id);
 }
 
-void ClientManager::handle_client_logout(WSClientPtr ws) {
-    auto client_ptr = static_cast<CMClientPtr*>(ws->get_super());
-    if (!client_ptr || !*client_ptr) return;
-    auto client = *client_ptr;
-    
+void ClientManager::handle_client_logout(CMClientPtr client) {
+    if (!client) return;
     uint32_t client_id = client->client_id();
-    client->remove_conn(ws);
+    if (client_id == 0) return; // Unauthenticated client, nothing to remove from DB or map
 
     std::lock_guard<std::mutex> lock(clients_mutex_);
-    if (client->empty()) {
+    auto it = clients_.find(client_id);
+    if (it != clients_.end() && it->second == client) {
         db_->setClientISeqNum(client_id, client->inbound_seq_num());
         db_->setClientOSeqNum(client_id, client->outbound_seq_num());
-        clients_.erase(client_id);
+        clients_.erase(it);
     }
     
-    ws->set_super(nullptr);
     LOG_INFO("[ClientManager] Client %d disconnected.", client_id);
 }
 
-void ClientManager::process_client_request(WSClientPtr ws, const void* data, size_t size)
+void ClientManager::process_client_request(CMClientPtr client, const void* data, size_t size)
 {
     DTRACE_PROBE(exchange, req_entry);
     flatbuffers::Verifier verifier(reinterpret_cast<const uint8_t*>(data), size);
@@ -131,23 +155,18 @@ void ClientManager::process_client_request(WSClientPtr ws, const void* data, siz
     if (type == ClientRequestData_AdminRequest) {
         auto admin_req = request->data_as_AdminRequest();
         if (admin_req->action() == AdminAction_LogOn) {
-            this->handle_client_logon(ws, admin_req);
+            handle_client_logon(client, admin_req);
         } else if (admin_req->action() == AdminAction_LogOut) {
-            this->handle_client_logout(ws);
-            // TODO: when received EOF, also process as logout
+            this->handle_client_logout(client);
         }
         return;
     }
 
-    // Check session readiness
-    if (!ws->is_ready()) {
-        // Optionally send an error or just ignore
+    WSClientPtr ws = client->get_conn();
+    if (!client->is_ready()) {
+        LOG_WARN("[ClientManager] Received non-admin request before logon completed.");
         return;
     }
-
-    auto client_ptr = static_cast<CMClientPtr*>(ws->get_super());
-    if (!client_ptr || !*client_ptr) return;
-    auto client = *client_ptr;
 
     switch (type) {
         case ClientRequestData_OrderRequest: {
@@ -237,7 +256,7 @@ void ClientManager::handle_execution_response(const OrderResponseT* resp)
         mut_resp.msg_seq_num = db_->incrementAndGetClientOSeqNum(client_id);
     }
 
-    if (client && !client->empty()) {
+    if (client) {
         flatbuffers::FlatBufferBuilder fbb(256);
         auto resp_offset = OrderResponse::Pack(fbb, &mut_resp);
         auto client_resp = CreateClientResponse(fbb, ClientResponseData_OrderResponse, resp_offset.Union());

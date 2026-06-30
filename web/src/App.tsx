@@ -47,7 +47,7 @@ function App() {
     mgmtLogs,
     clearMgmtLogs,
     symbolInfo
-  } = useExchange(parseInt(symbolId), handleNotification);
+  } = useExchange(parseInt(symbolId), handleNotification, () => setHasLoggedIn(false));
 
   // Set default prices based on the selected symbol info
   useEffect(() => {

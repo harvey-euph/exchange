@@ -62,7 +62,7 @@ const REJECT_MESSAGES: Record<number, string> = {
   [RejectCode.Unknown]: 'Unknown Error',
 };
 
-export function useExchange(activeSymbolId: number, onNotification?: (type: 'acked' | 'rejected' | 'info', title: string, content: string) => void) {
+export function useExchange(activeSymbolId: number, onNotification?: (type: 'acked' | 'rejected' | 'info', title: string, content: string) => void, onForceLogout?: () => void) {
   const [connected, setConnected] = useState<ConnectedState>({ mgmt: false, mgmtReady: false, l2: false });
   const [bids, setBids] = useState<Map<bigint, bigint>>(new Map());
   const [asks, setAsks] = useState<Map<bigint, bigint>>(new Map());
@@ -611,6 +611,12 @@ export function useExchange(activeSymbolId: number, onNotification?: (type: 'ack
 
                 builder.finish(clientReqOffset);
                 ws.send(builder.asUint8Array() as any);
+            } else if (reasonCode === RejectCode.LoginAtOtherSession) {
+                addMgmtLog(`Logged in from another session. Disconnecting.`);
+                onNotification?.('rejected', 'Disconnected', 'Logged in from another location');
+                lastClientIdRef.current = null;
+                onForceLogout?.();
+                ws.close();
             }
           }
         }

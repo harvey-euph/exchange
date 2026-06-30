@@ -221,6 +221,9 @@ int AlgoTradingClient::run() {
                     fbb.Finish(client_req);
                     mgmt_client_->send(fbb.GetBufferPointer(), fbb.GetSize());
                     LOG_INFO("[AlgoTradingClient] Sent resynced LogOn request with MSG=%d, ACK=%d", o_seq_num_, admin_resp->expected_ack_seq_num());
+                } else if (reason == RejectCode_LoginAtOtherSession) {
+                    LOG_ERROR("[AlgoTradingClient] Logged in at another session. Disconnecting.");
+                    stop();
                 }
             }
             return;

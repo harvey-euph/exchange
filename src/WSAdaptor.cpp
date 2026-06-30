@@ -32,22 +32,26 @@ class WSSession : public WSClient, public std::enable_shared_from_this<WSSession
     
     std::queue<std::string> write_queue_;
     std::mutex write_mutex_;
-    void* super_ = nullptr;
     bool writing_ = false;
-    bool ready_ = false;
     std::atomic<bool> closed_{false};
     std::string remote_info_;
 
     WSAdaptor::MessageHandler msg_handler_;
     WSAdaptor::CloseHandler close_handler_;
+    WSAdaptor::OpenHandler open_handler_;
+
+    std::function<void(const void*, size_t)> session_msg_handler_;
+    std::function<void()> session_close_handler_;
 
 public:
     explicit WSSession(tcp::socket&& socket, 
                        WSAdaptor::MessageHandler msg_handler,
-                       WSAdaptor::CloseHandler close_handler) 
+                       WSAdaptor::CloseHandler close_handler,
+                       WSAdaptor::OpenHandler open_handler) 
         : ws_(std::move(socket)), 
           msg_handler_(msg_handler),
-          close_handler_(close_handler)
+          close_handler_(close_handler),
+          open_handler_(open_handler)
     {
         try {
             auto ep = ws_.next_layer().socket().remote_endpoint();
@@ -59,15 +63,19 @@ public:
 
     bool is_closed() const { return closed_; }
 
-    void* get_super() const override { return super_; }
-    void set_super(void* p) override { super_ = p; }
-    
-    bool is_ready() const override { return ready_; }
-    void set_ready(bool ready) override { ready_ = ready; }
+    void set_message_handler(std::function<void(const void*, size_t)> handler) override {
+        session_msg_handler_ = handler;
+    }
+
+    void set_close_handler(std::function<void()> handler) override {
+        session_close_handler_ = handler;
+    }
 
     void on_close() {
         if (!closed_.exchange(true)) {
-            if (close_handler_) {
+            if (session_close_handler_) {
+                session_close_handler_();
+            } else if (close_handler_) {
                 close_handler_(shared_from_this());
             }
         }
@@ -75,7 +83,6 @@ public:
 
     net::awaitable<void> start() {
         try {
-            // Configure heartbeat and timeouts
             websocket::stream_base::timeout opt;
             opt.handshake_timeout = std::chrono::seconds(20);
             opt.idle_timeout = std::chrono::seconds(30);
@@ -86,9 +93,7 @@ public:
             ws_.control_callback(
                 [this](websocket::frame_type kind, beast::string_view payload) {
                     boost::ignore_unused(payload);
-                    if (kind == websocket::frame_type::pong) {
-                        // Successfully received pong from client browser
-                    }
+                    if (kind == websocket::frame_type::pong) {}
                 });
 
             ws_.binary(true);
@@ -96,7 +101,10 @@ public:
             co_await ws_.async_accept(net::use_awaitable);
             LOG_INFO("[WSSession] WebSocket Handshake successful for %s", remote_info_);
 
-            // Spawn read loop
+            if (open_handler_) {
+                open_handler_(shared_from_this());
+            }
+
             net::co_spawn(ws_.get_executor(), read_loop(), net::detached);
         } catch (std::exception const& e) {
             LOG_ERROR("[WSSession] Handshake error for %s: %s", remote_info_, e.what());
@@ -109,7 +117,9 @@ public:
             for (;;) {
                 co_await ws_.async_read(buffer_, net::use_awaitable);
                 
-                if (msg_handler_) {
+                if (session_msg_handler_) {
+                    session_msg_handler_(buffer_.data().data(), buffer_.size());
+                } else if (msg_handler_) {
                     msg_handler_(shared_from_this(), buffer_.data().data(), buffer_.size());
                 }
                 
@@ -132,6 +142,16 @@ public:
                 writing_ = true;
             }
             net::co_spawn(ws_.get_executor(), write_loop(), net::detached);
+        });
+    }
+
+    void close() override {
+        net::post(ws_.get_executor(), [this, self = shared_from_this()]() {
+            if (!closed_) {
+                boost::system::error_code ec;
+                ws_.next_layer().socket().close(ec);
+                on_close();
+            }
         });
     }
 
@@ -170,6 +190,7 @@ class WSListener : public std::enable_shared_from_this<WSListener> {
     std::mutex session_mutex_;
     WSAdaptor::MessageHandler msg_handler_;
     WSAdaptor::CloseHandler close_handler_;
+    WSAdaptor::OpenHandler open_handler_;
 
 public:
     WSListener(net::io_context& ioc, tcp::endpoint endpoint)
@@ -187,13 +208,9 @@ public:
         }
     }
 
-    void set_message_handler(WSAdaptor::MessageHandler handler) {
-        msg_handler_ = handler;
-    }
-
-    void set_close_handler(WSAdaptor::CloseHandler handler) {
-        close_handler_ = handler;
-    }
+    void set_message_handler(WSAdaptor::MessageHandler handler) { msg_handler_ = handler; }
+    void set_close_handler(WSAdaptor::CloseHandler handler) { close_handler_ = handler; }
+    void set_open_handler(WSAdaptor::OpenHandler handler) { open_handler_ = handler; }
 
     net::awaitable<void> run() {
         try {
@@ -203,7 +220,7 @@ public:
                 boost::system::error_code ec_nodelay;
                 socket.set_option(tcp::no_delay(true), ec_nodelay);
                 
-                auto session = std::make_shared<WSSession>(std::move(socket), msg_handler_, close_handler_);
+                auto session = std::make_shared<WSSession>(std::move(socket), msg_handler_, close_handler_, open_handler_);
                 LOG_INFO("[WSListener] Accepted new connection. Starting session...");
                 {
                     std::lock_guard<std::mutex> lock(session_mutex_);
@@ -265,6 +282,10 @@ void WSAdaptor::set_message_handler(MessageHandler handler) {
 
 void WSAdaptor::set_close_handler(CloseHandler handler) {
     pimpl_->listener->set_close_handler(handler);
+}
+
+void WSAdaptor::set_open_handler(OpenHandler handler) {
+    pimpl_->listener->set_open_handler(handler);
 }
 
 void WSAdaptor::send(WSClientPtr client, const void* data, size_t size) {

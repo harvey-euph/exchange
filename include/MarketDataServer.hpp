@@ -14,7 +14,6 @@
 #include <vector>
 #include <optional>
 #include <stdexcept>
-#include "EXCHClient.hpp"
 #include <memory>
 #include <atomic>
 #include <vector>
@@ -22,6 +21,62 @@
 #include <stdexcept>
 
 namespace Exchange {
+
+class MDClient : public std::enable_shared_from_this<MDClient> {
+public:
+    using MessageHandler = std::function<void(std::shared_ptr<MDClient>, const void*, size_t)>;
+
+    explicit MDClient(WSClientPtr ws) : conn_(ws) {}
+
+    void set_message_handler(MessageHandler handler) {
+        msg_handler_ = handler;
+    }
+
+    void on_message(const void* data, size_t size) {
+        if (msg_handler_) {
+            msg_handler_(this->shared_from_this(), data, size);
+        }
+    }
+
+    void send(const void* data, size_t size) {
+        if (conn_) {
+            conn_->send(data, size);
+        }
+    }
+
+    static void bind_adaptor(std::shared_ptr<WSAdaptor> adaptor, 
+                             std::function<void(std::shared_ptr<MDClient>)> on_open,
+                             std::function<void(std::shared_ptr<MDClient>)> on_close,
+                             std::function<void(std::shared_ptr<MDClient>, const void*, size_t)> on_message) 
+    {
+        adaptor->set_open_handler([on_open, on_close, on_message](WSClientPtr ws) {
+            auto client = std::make_shared<MDClient>(ws);
+
+            if (on_message) {
+                client->set_message_handler(on_message);
+                ws->set_message_handler([client](const void* data, size_t size) {
+                    client->on_message(data, size);
+                });
+            }
+
+            if (on_close) {
+                ws->set_close_handler([client, on_close]() {
+                    on_close(client);
+                });
+            }
+
+            if (on_open) {
+                on_open(client);
+            }
+        });
+    }
+
+private:
+    WSClientPtr conn_;
+    MessageHandler msg_handler_;
+};
+
+using MDClientPtr = std::shared_ptr<MDClient>;
 
 struct PendingOrder {
     uint64_t order_id;
@@ -42,7 +97,7 @@ public:
 private:
     std::pair<std::shared_ptr<L3Book>, OrderResponseT*> get_or_create_book(uint32_t symbol_id);
     void setup_handlers();
-    void handle_market_data_request(WSClientPtr client, const MarketDataRequest* req);
+    void handle_market_data_request(MDClientPtr client, const MarketDataRequest* req);
     void process_market_update(const OrderResponseT* resp);
 
     std::shared_ptr<WSAdaptor> ws_adaptor_;
@@ -59,10 +114,18 @@ private:
     std::mutex subs_mutex_;
     
     using MDTag = std::pair<MDType, uint32_t>;
-    using MDClient = EXCHClient<MDTag>;
-    using MDClientPtr = std::shared_ptr<MDClient>;
 
-    std::map<MDTag, MDClientPtr> md_clients_;
+    struct pair_hash {
+        template <class T1, class T2>
+        std::size_t operator () (const std::pair<T1,T2> &p) const {
+            auto h1 = std::hash<T1>{}(p.first);
+            auto h2 = std::hash<T2>{}(p.second);
+            return h1 ^ h2;
+        }
+    };
+
+    std::unordered_map<MDTag, std::unordered_set<MDClientPtr>, pair_hash> md_clients_;
+    std::unordered_map<MDClientPtr, std::vector<MDTag>> client_subs_;
 
     bool crosses(Side side, int64_t price, const std::shared_ptr<L3Book>& book) const;
     void validated_update(std::shared_ptr<L3Book> book, const OrderResponseT* resp, uint64_t timestamp);

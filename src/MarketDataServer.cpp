@@ -49,30 +49,30 @@ std::pair<std::shared_ptr<L3Book>, OrderResponseT*> MarketDataServer::get_or_cre
 
 void MarketDataServer::setup_handlers()
 {
-    ws_adaptor_->set_message_handler([this](WSClientPtr client, const void* data, size_t size) {
-        flatbuffers::Verifier verifier(reinterpret_cast<const uint8_t*>(data), size);
-        if (VerifyMarketDataRequestBuffer(verifier)) {
-            auto req = GetMarketDataRequest(data);
-            this->handle_market_data_request(client, req);
-        }
-    });
-
-    ws_adaptor_->set_close_handler([this](WSClientPtr ws) {
-        std::lock_guard<std::mutex> lock(subs_mutex_);
-        auto subs = static_cast<std::vector<MDClientPtr>*>(ws->get_super());
-        if (!subs) return;
-        for (auto& client : *subs) {
-            client->remove_conn(ws);
-            if (client->empty()) {
-                md_clients_.erase(client->tag());
+    MDClient::bind_adaptor(
+        ws_adaptor_,
+        nullptr, // on_open
+        [this](MDClientPtr client) { // on_close
+            std::lock_guard<std::mutex> lock(subs_mutex_);
+            auto it = client_subs_.find(client);
+            if (it != client_subs_.end()) {
+                for (const auto& tag : it->second) {
+                    md_clients_[tag].erase(client);
+                }
+                client_subs_.erase(it);
+            }
+        },
+        [this](MDClientPtr client, const void* data, size_t size) { // on_message
+            flatbuffers::Verifier verifier(reinterpret_cast<const uint8_t*>(data), size);
+            if (VerifyMarketDataRequestBuffer(verifier)) {
+                auto req = GetMarketDataRequest(data);
+                this->handle_market_data_request(client, req);
             }
         }
-        delete subs;
-        ws->set_super(nullptr);
-    });
+    );
 }
 
-void MarketDataServer::handle_market_data_request(WSClientPtr ws, const MarketDataRequest* req) {
+void MarketDataServer::handle_market_data_request(MDClientPtr client, const MarketDataRequest* req) {
     uint32_t symbol_id = req->symbol_id();
     MDType md_type = req->md_type();
     SubType sub_type = req->sub_type();
@@ -80,19 +80,11 @@ void MarketDataServer::handle_market_data_request(WSClientPtr ws, const MarketDa
 
     if (sub_type == SubType_unsubscribe) {
         std::lock_guard<std::mutex> lock(subs_mutex_);
-        auto client_it = md_clients_.find(tag);
-        if (client_it != md_clients_.end()) {
-            client_it->second->remove_conn(ws);
-            if (client_it->second->empty()) {
-                md_clients_.erase(client_it);
-            }
-        }
-        auto subs = static_cast<std::vector<MDClientPtr>*>(ws->get_super());
-        if (subs) {
-            subs->erase(
-                std::remove_if(subs->begin(), subs->end(), [&](const MDClientPtr& c) { return c->tag() == tag; }),
-                subs->end()
-            );
+        md_clients_[tag].erase(client);
+        auto it = client_subs_.find(client);
+        if (it != client_subs_.end()) {
+            auto& subs = it->second;
+            subs.erase(std::remove(subs.begin(), subs.end(), tag), subs.end());
         }
         LOG_INFO("[MarketDataServer] Client unsubscribed %d for symbol %d", (int)md_type, symbol_id);
         return;
@@ -103,16 +95,11 @@ void MarketDataServer::handle_market_data_request(WSClientPtr ws, const MarketDa
 
         {
             std::lock_guard<std::mutex> lock(subs_mutex_);
-            auto& client = md_clients_[tag];
-            if (!client) client = std::make_shared<MDClient>(tag);
-            client->add_conn(ws);
-            
-            auto subs = static_cast<std::vector<MDClientPtr>*>(ws->get_super());
-            if (!subs) {
-                subs = new std::vector<MDClientPtr>();
-                ws->set_super(subs);
+            md_clients_[tag].insert(client);
+            auto& subs = client_subs_[client];
+            if (std::find(subs.begin(), subs.end(), tag) == subs.end()) {
+                subs.push_back(tag);
             }
-            subs->push_back(client);
         }
         LOG_INFO("[MarketDataServer] Client subscribed %d for symbol %d", (int)md_type, symbol_id);
 
@@ -126,7 +113,7 @@ void MarketDataServer::handle_market_data_request(WSClientPtr ws, const MarketDa
                 auto l2_update = CreateL2Update(fbb, symbol_id, 0, Side_None, 0, 0, 0);
                 auto md_update = CreateMarketDataUpdate(fbb, MarketDataUpdateData_L2Update, l2_update.Union());
                 fbb.Finish(md_update);
-                ws->send(fbb.GetBufferPointer(), fbb.GetSize());
+                client->send(fbb.GetBufferPointer(), fbb.GetSize());
             }
 
             // 2. Send active levels
@@ -137,14 +124,14 @@ void MarketDataServer::handle_market_data_request(WSClientPtr ws, const MarketDa
                     auto l2_update = CreateL2Update(fbb, symbol_id, 0, Side_Buy, price, level.total_qty, 0);
                     auto md_update = CreateMarketDataUpdate(fbb, MarketDataUpdateData_L2Update, l2_update.Union());
                     fbb.Finish(md_update);
-                    ws->send(fbb.GetBufferPointer(), fbb.GetSize());
+                    client->send(fbb.GetBufferPointer(), fbb.GetSize());
                 }
                 for (auto const& [price, level] : book->asks) {
                     fbb.Clear();
                     auto l2_update = CreateL2Update(fbb, symbol_id, 0, Side_Sell, price, level.total_qty, 0);
                     auto md_update = CreateMarketDataUpdate(fbb, MarketDataUpdateData_L2Update, l2_update.Union());
                     fbb.Finish(md_update);
-                    ws->send(fbb.GetBufferPointer(), fbb.GetSize());
+                    client->send(fbb.GetBufferPointer(), fbb.GetSize());
                 }
             }
         } else if (md_type == MDType_L3) {
@@ -157,7 +144,7 @@ void MarketDataServer::handle_market_data_request(WSClientPtr ws, const MarketDa
                 auto l3_update = CreateL3Update(fbb, symbol_id, ExecType_Complete, 0, 0, Side_None, 0, 0, 0);
                 auto md_update = CreateMarketDataUpdate(fbb, MarketDataUpdateData_L3Update, l3_update.Union());
                 fbb.Finish(md_update);
-                ws->send(fbb.GetBufferPointer(), fbb.GetSize());
+                client->send(fbb.GetBufferPointer(), fbb.GetSize());
             }
 
             // 2. Send active orders
@@ -171,14 +158,14 @@ void MarketDataServer::handle_market_data_request(WSClientPtr ws, const MarketDa
                         auto l3_update = CreateL3Update(fbb, symbol_id, ExecType_New, 0, order.order_id, order.side, order.price, order.qty_req, 0);
                         auto md_update = CreateMarketDataUpdate(fbb, MarketDataUpdateData_L3Update, l3_update.Union());
                         fbb.Finish(md_update);
-                        ws->send(fbb.GetBufferPointer(), fbb.GetSize());
+                        client->send(fbb.GetBufferPointer(), fbb.GetSize());
 
                         if (order.qty_req > order.qty_rem) {
                             fbb.Clear();
                             auto fill_update = CreateL3Update(fbb, symbol_id, ExecType_PartialFill, 0, order.order_id, order.side, order.price, order.qty_req - order.qty_rem, 0);
                             auto md_fill = CreateMarketDataUpdate(fbb, MarketDataUpdateData_L3Update, fill_update.Union());
                             fbb.Finish(md_fill);
-                            ws->send(fbb.GetBufferPointer(), fbb.GetSize());
+                            client->send(fbb.GetBufferPointer(), fbb.GetSize());
                         }
                     }
                 }
@@ -190,14 +177,14 @@ void MarketDataServer::handle_market_data_request(WSClientPtr ws, const MarketDa
                         auto l3_update = CreateL3Update(fbb, symbol_id, ExecType_New, 0, order.order_id, order.side, order.price, order.qty_req, 0);
                         auto md_update = CreateMarketDataUpdate(fbb, MarketDataUpdateData_L3Update, l3_update.Union());
                         fbb.Finish(md_update);
-                        ws->send(fbb.GetBufferPointer(), fbb.GetSize());
+                        client->send(fbb.GetBufferPointer(), fbb.GetSize());
 
                         if (order.qty_req > order.qty_rem) {
                             fbb.Clear();
                             auto fill_update = CreateL3Update(fbb, symbol_id, ExecType_PartialFill, 0, order.order_id, order.side, order.price, order.qty_req - order.qty_rem, 0);
                             auto md_fill = CreateMarketDataUpdate(fbb, MarketDataUpdateData_L3Update, fill_update.Union());
                             fbb.Finish(md_fill);
-                            ws->send(fbb.GetBufferPointer(), fbb.GetSize());
+                            client->send(fbb.GetBufferPointer(), fbb.GetSize());
                         }
                     }
                 }
@@ -218,34 +205,36 @@ bool MarketDataServer::crosses(Side side, int64_t price, const std::shared_ptr<L
 }
 
 void MarketDataServer::publish_l3_update(uint32_t symbol_id, ExecType exec_type, uint64_t order_id, Side side, int64_t p, uint64_t q, uint64_t msg_seq_num, uint64_t timestamp) {
-    MDClientPtr client;
+    std::vector<MDClientPtr> target_clients;
     {
         std::lock_guard<std::mutex> lock(subs_mutex_);
         auto it = md_clients_.find({MDType_L3, symbol_id});
-        if (it != md_clients_.end() && !it->second->empty()) {
-            client = it->second;
+        if (it != md_clients_.end()) {
+            target_clients.assign(it->second.begin(), it->second.end());
         }
     }
-    if (!client) return;
+    if (target_clients.empty()) return;
 
     flatbuffers::FlatBufferBuilder fbb(512);
     auto l3_update = CreateL3Update(fbb, symbol_id, exec_type, msg_seq_num, order_id, side, p, q, timestamp);
     auto md_update = CreateMarketDataUpdate(fbb, MarketDataUpdateData_L3Update, l3_update.Union());
     fbb.Finish(md_update);
 
-    client->send(fbb.GetBufferPointer(), fbb.GetSize());
+    for (auto& client : target_clients) {
+        client->send(fbb.GetBufferPointer(), fbb.GetSize());
+    }
 }
 
 void MarketDataServer::publish_l2_update(uint32_t symbol_id, const std::vector<L2UpdateT>& updates, uint64_t msg_seq_num, uint64_t timestamp) {
-    MDClientPtr client;
+    std::vector<MDClientPtr> target_clients;
     {
         std::lock_guard<std::mutex> lock(subs_mutex_);
         auto it = md_clients_.find({MDType_L2, symbol_id});
-        if (it != md_clients_.end() && !it->second->empty()) { 
-            client = it->second;
+        if (it != md_clients_.end()) { 
+            target_clients.assign(it->second.begin(), it->second.end());
         }
     }
-    if (!client || updates.empty()) return;
+    if (target_clients.empty() || updates.empty()) return;
 
     for (const auto& up : updates) {
         flatbuffers::FlatBufferBuilder fbb(512);
@@ -253,7 +242,9 @@ void MarketDataServer::publish_l2_update(uint32_t symbol_id, const std::vector<L
         auto md_update = CreateMarketDataUpdate(fbb, MarketDataUpdateData_L2Update, l2_update.Union());
         fbb.Finish(md_update);
 
-        client->send(fbb.GetBufferPointer(), fbb.GetSize());
+        for (auto& client : target_clients) {
+            client->send(fbb.GetBufferPointer(), fbb.GetSize());
+        }
     }
 }
 
