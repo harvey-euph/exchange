@@ -95,7 +95,7 @@ public:
     int poll_server();
 
 private:
-    std::pair<std::shared_ptr<L3Book>, OrderResponseT*> get_or_create_book(uint32_t symbol_id);
+    std::pair<std::shared_ptr<L3Book>, OrderResponseT> get_or_create_book(uint32_t symbol_id);
     void setup_handlers();
     void handle_market_data_request(MDClientPtr client, const MarketDataRequest* req);
     void process_market_update(const OrderResponseT* resp);
@@ -103,32 +103,17 @@ private:
     std::shared_ptr<WSAdaptor> ws_adaptor_;
     mmaplog::MmapReader* response_ring_;
     
-    struct BookState {
-        std::shared_ptr<L3Book> book;
-        OrderResponseT *pending;
-    };
-
     std::mutex books_mutex_;
-    std::map<uint32_t, BookState> books_;
+    std::map<uint32_t, std::pair<std::shared_ptr<L3Book>, OrderResponseT>> books_;
 
     std::mutex subs_mutex_;
     
-    using MDTag = std::pair<MDType, uint32_t>;
-
-    struct pair_hash {
-        template <class T1, class T2>
-        std::size_t operator () (const std::pair<T1,T2> &p) const {
-            auto h1 = std::hash<T1>{}(p.first);
-            auto h2 = std::hash<T2>{}(p.second);
-            return h1 ^ h2;
-        }
-    };
-
-    std::unordered_map<MDTag, std::unordered_set<MDClientPtr>, pair_hash> md_clients_;
-    std::unordered_map<MDClientPtr, std::vector<MDTag>> client_subs_;
+    std::unordered_map<uint32_t, std::unordered_set<MDClientPtr>> l2_clients_;
+    std::unordered_map<uint32_t, std::unordered_set<MDClientPtr>> l3_clients_;
+    std::unordered_map<MDClientPtr, std::vector<std::pair<MDType, uint32_t>>> client_subs_;
 
     bool crosses(Side side, int64_t price, const std::shared_ptr<L3Book>& book) const;
-    void validated_update(std::shared_ptr<L3Book> book, const OrderResponseT* resp, uint64_t timestamp);
+    void __update(std::shared_ptr<L3Book> book, const OrderResponseT* resp, uint64_t timestamp);
     void publish_l3_update(uint32_t symbol_id, ExecType exec_type, uint64_t order_id, Side side, int64_t p, uint64_t q, uint64_t msg_seq_num, uint64_t timestamp);
     void publish_l2_update(uint32_t symbol_id, const std::vector<L2UpdateT>& updates, uint64_t msg_seq_num, uint64_t timestamp);
 };

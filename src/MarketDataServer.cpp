@@ -34,17 +34,18 @@ int MarketDataServer::poll_server()
     return 0;
 }
 
-std::pair<std::shared_ptr<L3Book>, OrderResponseT*> MarketDataServer::get_or_create_book(uint32_t symbol_id) {
+std::pair<std::shared_ptr<L3Book>, OrderResponseT> MarketDataServer::get_or_create_book(uint32_t symbol_id) {
     std::lock_guard<std::mutex> lock(books_mutex_);
     auto it = books_.find(symbol_id);
     if (it == books_.end()) {
         auto book = std::make_shared<L3Book>();
         book->symbol_id = symbol_id;
         auto& state = books_[symbol_id];
-        state.book = book;
-        return {state.book, nullptr};
+        state.first = book;
+        state.second.order_id = 0;
+        return state;
     }
-    return {it->second.book, it->second.pending};
+    return it->second;
 }
 
 void MarketDataServer::setup_handlers()
@@ -56,8 +57,12 @@ void MarketDataServer::setup_handlers()
             std::lock_guard<std::mutex> lock(subs_mutex_);
             auto it = client_subs_.find(client);
             if (it != client_subs_.end()) {
-                for (const auto& tag : it->second) {
-                    md_clients_[tag].erase(client);
+                for (const auto& [md_type, symbol_id] : it->second) {
+                    if (md_type == MDType_L2) {
+                        l2_clients_[symbol_id].erase(client);
+                    } else if (md_type == MDType_L3) {
+                        l3_clients_[symbol_id].erase(client);
+                    }
                 }
                 client_subs_.erase(it);
             }
@@ -72,31 +77,41 @@ void MarketDataServer::setup_handlers()
     );
 }
 
-void MarketDataServer::handle_market_data_request(MDClientPtr client, const MarketDataRequest* req) {
+void MarketDataServer::handle_market_data_request(MDClientPtr client, const MarketDataRequest* req)
+{
     uint32_t symbol_id = req->symbol_id();
     MDType md_type = req->md_type();
     SubType sub_type = req->sub_type();
-    MDTag tag{md_type, symbol_id};
-
     if (sub_type == SubType_unsubscribe) {
         std::lock_guard<std::mutex> lock(subs_mutex_);
-        md_clients_[tag].erase(client);
+        if (md_type == MDType_L2) {
+            l2_clients_[symbol_id].erase(client);
+        } else if (md_type == MDType_L3) {
+            l3_clients_[symbol_id].erase(client);
+        }
+
         auto it = client_subs_.find(client);
         if (it != client_subs_.end()) {
             auto& subs = it->second;
-            subs.erase(std::remove(subs.begin(), subs.end(), tag), subs.end());
+            subs.erase(std::remove(subs.begin(), subs.end(), std::make_pair(md_type, symbol_id)), subs.end());
         }
         LOG_INFO("[MarketDataServer] Client unsubscribed %d for symbol %d", (int)md_type, symbol_id);
         return;
     }
 
     if (sub_type == SubType_subscribe) {
-        auto [book, pending_ptr] = get_or_create_book(symbol_id);
+        auto [book, pending] = get_or_create_book(symbol_id);
 
         {
             std::lock_guard<std::mutex> lock(subs_mutex_);
-            md_clients_[tag].insert(client);
+            if (md_type == MDType_L2) {
+                l2_clients_[symbol_id].insert(client);
+            } else if (md_type == MDType_L3) {
+                l3_clients_[symbol_id].insert(client);
+            }
+
             auto& subs = client_subs_[client];
+            auto tag = std::make_pair(md_type, symbol_id);
             if (std::find(subs.begin(), subs.end(), tag) == subs.end()) {
                 subs.push_back(tag);
             }
@@ -208,8 +223,8 @@ void MarketDataServer::publish_l3_update(uint32_t symbol_id, ExecType exec_type,
     std::vector<MDClientPtr> target_clients;
     {
         std::lock_guard<std::mutex> lock(subs_mutex_);
-        auto it = md_clients_.find({MDType_L3, symbol_id});
-        if (it != md_clients_.end()) {
+        auto it = l3_clients_.find(symbol_id);
+        if (it != l3_clients_.end()) {
             target_clients.assign(it->second.begin(), it->second.end());
         }
     }
@@ -229,8 +244,8 @@ void MarketDataServer::publish_l2_update(uint32_t symbol_id, const std::vector<L
     std::vector<MDClientPtr> target_clients;
     {
         std::lock_guard<std::mutex> lock(subs_mutex_);
-        auto it = md_clients_.find({MDType_L2, symbol_id});
-        if (it != md_clients_.end()) { 
+        auto it = l2_clients_.find(symbol_id);
+        if (it != l2_clients_.end()) { 
             target_clients.assign(it->second.begin(), it->second.end());
         }
     }
@@ -250,39 +265,35 @@ void MarketDataServer::publish_l2_update(uint32_t symbol_id, const std::vector<L
 
 void MarketDataServer::process_market_update(const OrderResponseT* resp)
 {
-    if (!check_exec(resp->exec_type, EXEC_MD)) {
-        return;
-    }
+    if (!check_exec(resp->exec_type, EXEC_MD)) return;
 
-    auto [book, pending_ptr] = get_or_create_book(resp->symbol_id);
+    auto [book, pending] = get_or_create_book(resp->symbol_id);
 
     uint64_t timestamp = 0; // Or whatever timestamp we have
     
-    if (pending_ptr) {
+    if (pending.order_id) {
         if (check_exec(resp->exec_type, EXEC_RESP)) {
-            LOG_ERROR("[MarketDataServer] FATAL: Received new crossing order %d while pending_order %d is still active!", resp->order_id, pending_ptr->order_id);
+            LOG_ERROR("[MarketDataServer] FATAL: Received new crossing order %d while pending_order %d is still active!", resp->order_id, pending.order_id);
             throw std::runtime_error("Multiple pending orders");
-        } else if (check_exec(resp->exec_type, EXEC_ANN) && resp->order_id == pending_ptr->order_id) {
-            delete pending_ptr;
-            pending_ptr = nullptr;
+        } else if (check_exec(resp->exec_type, EXEC_ANN) && resp->order_id == pending.order_id) {
+            pending.order_id = 0;
             return;
         }
     } else if (check_exec(resp->exec_type, EXEC_ME) && crosses(resp->side, resp->p, book)) {
-        pending_ptr = new OrderResponseT {*resp};
+        pending = *resp;
         return;
     }
 
-    validated_update(book, resp, timestamp);
+    __update(book, resp, timestamp);
 
-    if (!pending_ptr) return;
-    if ((pending_ptr->exec_type == ExecType_New) && !crosses(pending_ptr->side, pending_ptr->p, book)) {
-        validated_update(book, pending_ptr, timestamp);
-        delete pending_ptr;
-        pending_ptr = nullptr;
-    }
+    if (!pending.order_id) return;
+    if (crosses(pending.side, pending.p, book)) return;
+
+    __update(book, &pending, timestamp);
+    pending.order_id = 0;
 }
 
-void MarketDataServer::validated_update(std::shared_ptr<L3Book> book, const OrderResponseT* resp, uint64_t timestamp)
+void MarketDataServer::__update(std::shared_ptr<L3Book> book, const OrderResponseT* resp, uint64_t timestamp)
 {
     auto updates = book->update(resp->exec_type, resp->order_id, resp->side, resp->p, resp->q);
     publish_l3_update(resp->symbol_id, resp->exec_type, resp->order_id, resp->side, resp->p, resp->q, resp->msg_seq_num, timestamp);
