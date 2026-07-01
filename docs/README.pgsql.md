@@ -237,11 +237,6 @@ Launch the core exchange services (including `matching-engine`, `client-manager`
 ```
 *Note: `public-data` is dynamically discovered and launched by the script.*
 
-To check active services running inside tmux, run:
-```bash
-tmux list-windows -t exchange
-```
-
 To stop all services and clean up resources:
 ```bash
 ./kill-all

@@ -35,7 +35,7 @@ public:
     void gdb_dump_book(uint32_t symbol_id, const char* filepath);
 
 private:
-    std::pair<std::shared_ptr<L3Book>, OrderResponseT> get_or_create_book(uint32_t symbol_id);
+    std::pair<std::shared_ptr<L3Book>, OrderResponseT>& get_or_create_book(uint32_t symbol_id);
     void handle_market_data_request(MDClientPtr client, const MarketDataRequest* req);
     void process_market_update(const OrderResponseT* resp);
 

@@ -224,7 +224,7 @@ test: $(TEST_TARGETS)
 	@for md_test in tests/md-*; do \
 		if [ -d "$$md_test" ]; then \
 			echo "Running MD Test: $$md_test"; \
-			sudo ./scripts/run-md-test "$$md_test" || exit $$?; \
+			./scripts/run-md-test "$$md_test" || exit $$?; \
 		fi \
 	done
 

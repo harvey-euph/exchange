@@ -58,7 +58,7 @@ int MarketDataServer::poll_server()
     return 0;
 }
 
-std::pair<std::shared_ptr<L3Book>, OrderResponseT> MarketDataServer::get_or_create_book(uint32_t symbol_id)
+std::pair<std::shared_ptr<L3Book>, OrderResponseT>& MarketDataServer::get_or_create_book(uint32_t symbol_id)
 {
     std::lock_guard<std::mutex> lock(books_mutex_);
     auto it = books_.find(symbol_id);
@@ -97,7 +97,7 @@ void MarketDataServer::handle_market_data_request(MDClientPtr client, const Mark
     }
 
     if (sub_type == SubType_subscribe) {
-        auto [book, pending] = get_or_create_book(symbol_id);
+        auto& [book, pending] = get_or_create_book(symbol_id);
 
         {
             std::lock_guard<std::mutex> lock(subs_mutex_);
@@ -267,7 +267,7 @@ void MarketDataServer::process_market_update(const OrderResponseT* resp)
 {
     if (!check_exec(resp->exec_type, EXEC_MD)) return;
 
-    auto [book, pending] = get_or_create_book(resp->symbol_id);
+    auto& [book, pending] = get_or_create_book(resp->symbol_id);
 
     uint64_t timestamp = 0; // Or whatever timestamp we have
     
