@@ -85,20 +85,26 @@ echo "Comparing client book with expected result..."
 diff -q "${TEST_DIR}/client-book.csv" "$EXPECTED_CSV"
 CLIENT_CHECK=$?
 
+if [ $SERVER_CHECK -eq 0 ]; then
+    echo "✅ SERVER TEST PASSED: $TEST_DIR"
+else
+    echo "❌ SERVER TEST FAILED: $TEST_DIR"
+    echo "--- Server Book Diff ---"
+    diff "${TEST_DIR}/server-book.csv" "$EXPECTED_CSV"
+fi
+
+if [ $CLIENT_CHECK -eq 0 ]; then
+    echo "✅ CLIENT TEST PASSED: $TEST_DIR"
+else
+    echo "❌ CLIENT TEST FAILED: $TEST_DIR"
+    echo "--- Client Book Diff ---"
+    diff "${TEST_DIR}/client-book.csv" "$EXPECTED_CSV"
+fi
+
+rm -f "${TEST_DIR}/server-book.csv" "${TEST_DIR}/client-book.csv"
+
 if [ $SERVER_CHECK -eq 0 ] && [ $CLIENT_CHECK -eq 0 ]; then
-    echo "✅ TEST PASSED: $TEST_DIR"
-    # rm -f "${TEST_DIR}/server-book.csv" "${TEST_DIR}/client-book.csv"
     exit 0
 else
-    echo "❌ TEST FAILED: $TEST_DIR"
-    if [ $SERVER_CHECK -ne 0 ]; then
-        echo "--- Server Book Diff ---"
-        diff "${TEST_DIR}/server-book.csv" "$EXPECTED_CSV"
-    fi
-    if [ $CLIENT_CHECK -ne 0 ]; then
-        echo "--- Client Book Diff ---"
-        diff "${TEST_DIR}/client-book.csv" "$EXPECTED_CSV"
-    fi
-    # rm -f "${TEST_DIR}/server-book.csv" "${TEST_DIR}/client-book.csv"
     exit 1
 fi
